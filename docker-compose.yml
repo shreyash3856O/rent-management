@@ -1,0 +1,13 @@
+services:
+  app:
+    build: .
+    ports:
+      - "4000:4000"
+    env_file:
+      - .env
+    environment:
+      NODE_ENV: production
+      JWT_SECRET: ${JWT_SECRET:?Set JWT_SECRET in .env before starting}
+    volumes:
+      - ./data:/data
+    restart: unless-stopped

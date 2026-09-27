@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
-import { BrowserRouter, Routes, Route, Link, NavLink, useNavigate, Navigate } from 'react-router-dom';
-import { api, money, fmtDate } from './api.js';
+import { BrowserRouter, Routes, Route, Link, NavLink, useNavigate, useLocation, useParams, Navigate } from 'react-router-dom';
+import { api, money, fmtDate, uploadFile } from './api.js';
 
 function useFetch(path, deps = []) {
   const [data, setData] = useState(null);
@@ -32,7 +32,7 @@ function AdminLogin() {
     <p><button className="primary" disabled={!email || !password} onClick={async () => {
       try { const r = await api.post('/api/auth/login', { email, password }); localStorage.setItem('prm_token', r.token); localStorage.setItem('prm_role', 'staff'); nav('/admin'); }
       catch (e) { setErr(e.message); }
-    }}>Sign in</button> <Link to="/tenant/login">Tenant sign in</Link></p>
+    }}>Sign in</button> <Link className="btn" to="/tenant/login">Tenant sign in</Link></p>
   </div>);
 }
 function TenantLogin() {
@@ -52,7 +52,7 @@ function TenantLogin() {
     <p><button className="primary" disabled={!mobile || !otp} onClick={async () => {
       try { const r = await api.post('/api/auth/tenant/verify-otp', { mobile, otp }); localStorage.setItem('prm_token', r.token); localStorage.setItem('prm_role', 'tenant'); nav('/tenant'); }
       catch (e) { setErr(e.message); }
-    }}>Verify and sign in</button> <Link to="/login">Admin sign in</Link></p>
+    }}>Verify and sign in</button> <Link className="btn" to="/login">Admin sign in</Link></p>
   </div>);
 }
 function logout(nav) { localStorage.removeItem('prm_token'); localStorage.removeItem('prm_role'); nav('/login'); }
@@ -60,11 +60,12 @@ function logout(nav) { localStorage.removeItem('prm_token'); localStorage.remove
 /* ---------- admin ---------- */
 function AdminLayout() {
   const nav = useNavigate();
+  const loc = useLocation();
   const items = [['/admin', 'Dashboard'], ['/admin/hierarchy', 'Properties'], ['/admin/tenants', 'Tenants'], ['/admin/agreements', 'Agreements'], ['/admin/invoices', 'Invoices'], ['/admin/payments', 'Payments'], ['/admin/complaints', 'Complaints'], ['/admin/audit', 'Audit log']];
   return (<div><div className="topbar"><span className="brand">Rent Ledger. Admin.</span>
-    <span><Link to="/tenant">Tenant view</Link> <button onClick={() => { if (window.confirm('Sign out now?')) logout(nav); }}>Sign out</button></span></div>
+    <span className="actions"><Link className="btn" to="/tenant">Tenant view</Link> <button onClick={() => { if (window.confirm('Sign out now?')) logout(nav); }}>Sign out</button></span></div>
     <div className="layout"><nav className="sidenav">{items.map(([p, l]) => <NavLink key={p} to={p} end={p === '/admin'} className={({ isActive }) => isActive ? 'active' : ''}>{l}</NavLink>)}</nav>
-      <div className="content"><Routes>
+      <div className="content"><div key={loc.pathname} className="page"><Routes>
         <Route index element={<Dashboard />} />
         <Route path="hierarchy" element={<Hierarchy />} />
         <Route path="tenants" element={<Tenants />} />
@@ -73,7 +74,8 @@ function AdminLayout() {
         <Route path="payments" element={<Payments />} />
         <Route path="complaints" element={<AdminComplaints />} />
         <Route path="audit" element={<Audit />} />
-      </Routes></div></div></div>);
+        <Route path="receipt/:id" element={<ReceiptView base="/api" />} />
+      </Routes></div></div></div></div>);
 }
 function Dashboard() {
   const [d, err, load] = useFetch('/api/dashboard/summary');
@@ -168,6 +170,8 @@ function Tenants() {
   const [kyc] = useFetch('/api/kyc');
   const [f, setF] = useState({ full_name: '', mobile: '', email: '' });
   const [err, setErr] = useState(null);
+  const [doc, setDoc] = useState({ tenant_id: '', document_type: 'AADHAAR', document_number: '' });
+  const [docFile, setDocFile] = useState(null);
   const set = (k, v) => setF({ ...f, [k]: v });
   return (<div><h1>Tenants and KYC.</h1><p className="sub">Register a tenant, then set KYC status. Verification detail stays on this page.</p>
     <div className="form-grid">
@@ -178,6 +182,20 @@ function Tenants() {
     <p><button className="primary" onClick={async () => {
       try { if (need(f.full_name) || need(f.mobile)) { setErr('Name and mobile are required.'); return; } await api.post('/api/tenants', f); setF({ full_name: '', mobile: '', email: '' }); setErr(null); load(); } catch (e) { setErr(e.message); }
     }}>Register tenant</button></p>
+    <h2>Add a KYC document.</h2>
+    <div className="form-grid">
+      <Field label="Tenant"><select value={doc.tenant_id} onChange={(e) => setDoc({ ...doc, tenant_id: e.target.value })}><option value="">Select</option>{(list || []).map((t) => <option key={t.tenant_id} value={t.tenant_id}>{t.full_name}</option>)}</select></Field>
+      <Field label="Type"><select value={doc.document_type} onChange={(e) => setDoc({ ...doc, document_type: e.target.value })}><option>AADHAAR</option><option>PAN</option><option>PASSPORT</option><option>DRIVING_LICENSE</option><option>ADDRESS_PROOF</option><option>EMPLOYMENT_PROOF</option><option>PHOTO</option><option>OTHER</option></select></Field>
+      <Field label="Number"><input value={doc.document_number} onChange={(e) => setDoc({ ...doc, document_number: e.target.value })} /></Field>
+      <Field label="File"><input type="file" accept=".jpg,.jpeg,.png,.webp,.pdf" onChange={(e) => setDocFile(e.target.files[0] || null)} /></Field></div>
+    <p><button onClick={async () => {
+      try {
+        if (!doc.tenant_id || !docFile) { setErr('Pick a tenant and a file first.'); return; }
+        const up = await uploadFile(docFile);
+        await api.post('/api/tenant-documents', { tenant_id: Number(doc.tenant_id), document_type: doc.document_type, document_number: doc.document_number || null, file_path: up.file_path });
+        setErr(null); setDoc({ tenant_id: '', document_type: 'AADHAAR', document_number: '' }); setDocFile(null);
+      } catch (e) { setErr(e.message); }
+    }}>Upload document</button></p>
     <table className="grid"><thead><tr><th>Name</th><th>Mobile</th><th>KYC</th><th>Action</th></tr></thead><tbody>
       {(list || []).map((t) => {
         const k = (kyc || []).find((x) => x.tenant_id === t.tenant_id);
@@ -216,6 +234,13 @@ function Invoices() {
   const [month, setMonth] = useState(() => new Date().toISOString().slice(0, 7) + '-01');
   const [msg, setMsg] = useState(null);
   const [pay, setPay] = useState({ invoice_id: '', amount: '', payment_mode: 'UPI', payment_reference: '' });
+  const [sel, setSel] = useState(null);
+  const [detail, setDetail] = useState(null);
+  const openDetail = async (id) => {
+    if (sel === id) { setSel(null); setDetail(null); return; }
+    setSel(id); setDetail(null);
+    try { setDetail(await api.get(`/api/invoices/${id}`)); } catch (e) { setMsg(e.message); }
+  };
   const gen = async () => {
     try { const r = await api.post('/api/jobs/generate-rent', { month }); setMsg(`Generated ${r.created} invoices, skipped ${r.skipped} duplicates for ${r.month}.`); load(); }
     catch (e) { setMsg(e.message); }
@@ -239,30 +264,61 @@ function Invoices() {
       <Field label="Mode"><select value={pay.payment_mode} onChange={(e) => setPay({ ...pay, payment_mode: e.target.value })}><option>UPI</option><option>CASH</option><option>CHEQUE</option><option>NET_BANKING</option><option>CREDIT_CARD</option><option>DEBIT_CARD</option><option>BANK_TRANSFER</option></select></Field>
       <Field label="Reference"><input value={pay.payment_reference} onChange={(e) => setPay({ ...pay, payment_reference: e.target.value })} /></Field></div>
     <p><button className="primary" onClick={record}>Record payment</button></p>
-    <table className="grid"><thead><tr><th>Number</th><th>Tenant</th><th>Month</th><th>Due</th><th>Total</th><th>Paid</th><th>Due bal</th><th>Status</th></tr></thead><tbody>
-      {(list || []).map((i) => <tr key={i.invoice_id}><td>{i.invoice_number}</td><td>{i.tenant_name}</td><td>{fmtDate(i.invoice_month)}</td><td>{fmtDate(i.due_date)}</td><td>{money(i.total_amount)}</td><td>{money(i.paid_amount)}</td><td>{money(i.outstanding_amount)}</td><td>{i.status === 'OVERDUE' ? <span className="tag overdue">OVERDUE</span> : <span className="tag">{i.status}</span>}</td></tr>)}</tbody></table>
+    <table className="grid"><thead><tr><th>Number</th><th>Tenant</th><th>Month</th><th>Due</th><th>Total</th><th>Paid</th><th>Due bal</th><th>Status</th><th>Detail</th></tr></thead><tbody>
+      {(list || []).map((i) => <tr key={i.invoice_id}><td>{i.invoice_number}</td><td>{i.tenant_name}</td><td>{fmtDate(i.invoice_month)}</td><td>{fmtDate(i.due_date)}</td><td>{money(i.total_amount)}</td><td>{money(i.paid_amount)}</td><td>{money(i.outstanding_amount)}</td><td>{i.status === 'OVERDUE' ? <span className="tag overdue">OVERDUE</span> : <span className="tag">{i.status}</span>}</td><td><button onClick={() => openDetail(i.invoice_id)}>{sel === i.invoice_id ? 'Hide' : 'View'}</button></td></tr>)}</tbody></table>
+    {detail ? <div><h2>Invoice {detail.invoice_number}: line items, payments, receipts.</h2>
+      <table className="grid"><thead><tr><th>Item</th><th>Description</th><th>Qty</th><th>Rate</th><th>Amount</th></tr></thead><tbody>
+        {(detail.items || []).map((it) => <tr key={it.invoice_item_id}><td>{it.item_type}</td><td>{it.description}</td><td>{it.quantity}</td><td>{money(it.rate)}</td><td>{money(it.amount)}</td></tr>)}</tbody></table>
+      <table className="grid"><thead><tr><th>Payment</th><th>Amount</th><th>Mode</th><th>Status</th><th>Receipt</th></tr></thead><tbody>
+        {(detail.payments || []).map((p) => {
+          const r = (detail.receipts || []).find((x) => x.payment_id === p.payment_id);
+          return <tr key={p.payment_id}><td>{p.payment_reference || p.payment_id}</td><td>{money(p.amount)}</td><td>{p.payment_mode}</td><td>{p.status}</td><td>{r ? <Link to={`/admin/receipt/${r.receipt_id}`}>{r.receipt_number}</Link> : '-'}</td></tr>;
+        })}</tbody></table></div> : null}
   </div>);
 }
 function Payments() {
   const [list] = useFetch('/api/payments');
   const [rc] = useFetch('/api/receipts');
-  const dl = (r) => {
-    const txt = `RENT RECEIPT\nReceipt: ${r.receipt_number}\nDate: ${fmtDate(r.receipt_date)}\nTenant: ${r.tenant_name || ''}\nAmount: ${r.amount}\nPayment ID: ${r.payment_id}`;
-    const a = document.createElement('a');
-    a.href = URL.createObjectURL(new Blob([txt], { type: 'text/plain' }));
-    a.download = `${r.receipt_number}.txt`; a.click();
-  };
   return (<div><h1>Payments and receipts.</h1><p className="sub">Every SUCCESS payment creates a receipt. Invoices reach PAID only through payment rows.</p>
     <h2>Receipts.</h2>
     <table className="grid"><thead><tr><th>Receipt</th><th>Tenant</th><th>Amount</th><th>Date</th><th>Action</th></tr></thead><tbody>
-      {(rc || []).map((r) => <tr key={r.receipt_id}><td>{r.receipt_number}</td><td>{r.tenant_name}</td><td>{money(r.amount)}</td><td>{fmtDate(r.receipt_date)}</td><td><button onClick={() => dl(r)}>Download</button></td></tr>)}</tbody></table>
+      {(rc || []).map((r) => <tr key={r.receipt_id}><td>{r.receipt_number}</td><td>{r.tenant_name}</td><td>{money(r.amount)}</td><td>{fmtDate(r.receipt_date)}</td><td><Link className="btn" to={`/admin/receipt/${r.receipt_id}`}>View and print</Link></td></tr>)}</tbody></table>
     <h2>Payments.</h2>
     <table className="grid"><thead><tr><th>ID</th><th>Tenant</th><th>Amount</th><th>Mode</th><th>Status</th><th>Ref</th></tr></thead><tbody>
       {(list || []).map((p) => <tr key={p.payment_id}><td>{p.payment_id}</td><td>{p.tenant_name}</td><td>{money(p.amount)}</td><td>{p.payment_mode}</td><td><span className="tag">{p.status}</span></td><td>{p.payment_reference}</td></tr>)}</tbody></table>
   </div>);
 }
+function ReceiptView({ base }) {
+  const { id } = useParams();
+  const [d, err] = useFetch(`${base}/receipts/${id}`);
+  if (err) return <div className="field-err">{err}</div>;
+  if (!d) return <p>Loading receipt.</p>;
+  const rows = [
+    ['Organization', d.organization?.organization_name],
+    ['Property', d.property?.property_name],
+    ['Tenant', d.tenant?.full_name],
+    ['Invoice', d.invoice ? `${d.invoice.invoice_number} (${fmtDate(d.invoice.invoice_month)})` : ''],
+    ['Payment mode', d.payment?.payment_mode],
+    ['Payment reference', d.payment?.payment_reference || '-'],
+    ['Payment date', fmtDate(d.payment?.payment_date)],
+  ];
+  return (<div><div className="toolbar noprint"><button onClick={() => window.history.back()}>Back</button><button className="primary" onClick={() => window.print()}>Print or save PDF</button></div>
+    <div className="receipt">
+      <h1>Rent receipt.</h1>
+      <p className="sub">{d.receipt.receipt_number} dated {fmtDate(d.receipt.receipt_date)}</p>
+      <table className="grid"><tbody>{rows.map(([k, v]) => <tr key={k}><th>{k}</th><td>{v}</td></tr>)}</tbody></table>
+      <div className="kpi" style={{ border: '1px solid var(--line-dark)', marginTop: 8 }}><div className="l">Amount received</div><div className="n">{money(d.receipt.amount)}</div></div>
+      <p className="sub">Generated automatically on payment. Invoice {d.invoice?.invoice_number} now shows {money(d.invoice?.paid_amount)} paid, {money(d.invoice?.outstanding_amount)} outstanding.</p>
+    </div></div>);
+}
 function AdminComplaints() {
   const [list, , load] = useFetch('/api/complaints');
+  const [files, setFiles] = useState(null);
+  const showFiles = async (c) => {
+    if (files && files.id === c.complaint_id) { setFiles(null); return; }
+    const d = await api.get(`/api/complaints/${c.complaint_id}`);
+    setFiles({ id: c.complaint_id, items: d.attachments || [] });
+  };
   const adv = async (c) => {
     const flow = ['OPEN', 'ASSIGNED', 'IN_PROGRESS', 'RESOLVED', 'CLOSED'];
     const nxt = flow[flow.indexOf(c.status) + 1];
@@ -271,8 +327,12 @@ function AdminComplaints() {
     load();
   };
   return (<div><h1>Complaints.</h1><p className="sub">Flow is Open, Assigned, In Progress, Resolved, Closed. Steps only move forward.</p>
-    <table className="grid"><thead><tr><th>No</th><th>Tenant</th><th>Category</th><th>Title</th><th>Status</th><th>Action</th></tr></thead><tbody>
-      {(list || []).map((c) => <tr key={c.complaint_id}><td>{c.complaint_number}</td><td>{c.tenant_name}</td><td>{c.category}</td><td>{c.title}</td><td><span className="tag">{c.status}</span></td><td><button onClick={() => adv(c)}>Advance</button></td></tr>)}</tbody></table>
+    <table className="grid"><thead><tr><th>No</th><th>Tenant</th><th>Category</th><th>Title</th><th>Files</th><th>Status</th><th>Action</th></tr></thead><tbody>
+      {(list || []).map((c) => <tr key={c.complaint_id}><td>{c.complaint_number}</td><td>{c.tenant_name}</td><td>{c.category}</td><td>{c.title}</td><td>{c.files ? <button onClick={() => showFiles(c)}>{c.files} file(s)</button> : 0}</td><td><span className="tag">{c.status}</span></td><td><button onClick={() => adv(c)}>Advance</button></td></tr>)}</tbody></table>
+    {files ? <div><h2>Attachments for complaint {files.id}.</h2>
+      <table className="grid"><thead><tr><th>File</th><th>Open</th></tr></thead><tbody>
+        {files.items.map((a) => <tr key={a.document_id}><td>{a.file_name}</td><td><a href={a.file_path} target="_blank" rel="noreferrer">Open</a></td></tr>)}
+      </tbody></table></div> : null}
   </div>);
 }
 function Audit() {
@@ -286,13 +346,14 @@ function Audit() {
 /* ---------- tenant ---------- */
 function TenantLayout() {
   const nav = useNavigate();
+  const loc = useLocation();
   return (<div><div className="topbar"><span className="brand">Rent Ledger. Tenant.</span>
-    <span><Link to="/admin">Admin view</Link> <button onClick={() => { if (window.confirm('Sign out now?')) logout(nav); }}>Sign out</button></span></div>
-    <div className="tenant-wrap"><nav className="toolbar">
+    <span className="actions"><Link className="btn" to="/admin">Admin view</Link> <button onClick={() => { if (window.confirm('Sign out now?')) logout(nav); }}>Sign out</button></span></div>
+    <div className="tenant-wrap"><nav className="segnav">
       <NavLink to="/tenant" end>Home</NavLink><NavLink to="/tenant/rent">Rent</NavLink><NavLink to="/tenant/complaints">Complaints</NavLink><NavLink to="/tenant/docs">Documents</NavLink><NavLink to="/tenant/notices">Notices</NavLink>
-    </nav><Routes>
-      <Route index element={<THome />} /><Route path="rent" element={<TRent />} /><Route path="complaints" element={<TComplaints />} /><Route path="docs" element={<TDocs />} /><Route path="notices" element={<TNotices />} />
-    </Routes></div></div>);
+    </nav><div key={loc.pathname} className="page"><Routes>
+      <Route index element={<THome />} /><Route path="rent" element={<TRent />} /><Route path="complaints" element={<TComplaints />} /><Route path="docs" element={<TDocs />} /><Route path="notices" element={<TNotices />} /><Route path="receipt/:id" element={<ReceiptView base="/api/tenant" />} />
+    </Routes></div></div></div>);
 }
 function THome() {
   const [d, err] = useFetch('/api/tenant/me');
@@ -310,19 +371,22 @@ function THome() {
 function TRent() {
   const [inv] = useFetch('/api/tenant/invoices');
   const [pay] = useFetch('/api/tenant/payments');
-  const dl = (r) => {
-    const txt = `RENT RECEIPT\nReceipt: ${r.receipt_number}\nDate: ${fmtDate(r.receipt_date || r.payment_date)}\nAmount: ${r.amount}`;
-    const a = document.createElement('a');
-    a.href = URL.createObjectURL(new Blob([txt], { type: 'text/plain' }));
-    a.download = `${r.receipt_number || 'receipt-' + r.payment_id}.txt`; a.click();
-  };
+  const [from, setFrom] = useState(() => new Date().getFullYear() + '-01-01');
+  const [to, setTo] = useState(() => new Date().toISOString().slice(0, 10));
+  const [stmt, setStmt] = useState(null);
+  const loadStmt = async () => { try { setStmt(await api.get(`/api/tenant/statement?from=${from}&to=${to}`)); } catch (e) { setStmt({ error: e.message }); } };
+  useEffect(() => { loadStmt(); }, []);
   return (<div><h1>Rent and receipts.</h1><p className="sub">Current invoice first, then history. Payment is recorded by the office in v1.</p>
     <h2>Current and past invoices.</h2>
     <table className="grid"><thead><tr><th>Number</th><th>Due</th><th>Total</th><th>Paid</th><th>Status</th></tr></thead><tbody>
       {(inv || []).map((i) => <tr key={i.invoice_id}><td>{i.invoice_number}</td><td>{fmtDate(i.due_date)}</td><td>{money(i.total_amount)}</td><td>{money(i.paid_amount)}</td><td>{i.status === 'OVERDUE' ? <span className="tag overdue">OVERDUE by record</span> : <span className="tag">{i.status}</span>}</td></tr>)}</tbody></table>
     <h2>Payment history.</h2>
     <table className="grid"><thead><tr><th>Receipt</th><th>Amount</th><th>Date</th><th>Action</th></tr></thead><tbody>
-      {(pay || []).map((p) => <tr key={p.payment_id}><td>{p.receipt_number || '-'}</td><td>{money(p.amount)}</td><td>{fmtDate(p.payment_date)}</td><td>{p.receipt_number ? <button onClick={() => dl(p)}>Download</button> : null}</td></tr>)}</tbody></table>
+      {(pay || []).map((p) => <tr key={p.payment_id}><td>{p.receipt_number || '-'}</td><td>{money(p.amount)}</td><td>{fmtDate(p.payment_date)}</td><td>{p.receipt_id ? <Link className="btn" to={`/tenant/receipt/${p.receipt_id}`}>View and print</Link> : null}</td></tr>)}</tbody></table>
+    <h2>Ledger statement.</h2>
+    <div className="toolbar"><input type="date" value={from} onChange={(e) => setFrom(e.target.value)} /><input type="date" value={to} onChange={(e) => setTo(e.target.value)} /><button onClick={loadStmt}>Load</button></div>
+    <table className="grid"><thead><tr><th>Date</th><th>Type</th><th>Reference</th><th>Billed</th><th>Paid</th></tr></thead><tbody>
+      {(Array.isArray(stmt) ? stmt : []).map((s, k) => <tr key={k}><td>{fmtDate(s.transaction_date)}</td><td>{s.transaction_type}</td><td>{s.reference_no}</td><td>{s.debit ? money(s.debit) : '-'}</td><td>{s.credit ? money(s.credit) : '-'}</td></tr>)}</tbody></table>
   </div>);
 }
 function TComplaints() {
@@ -330,6 +394,7 @@ function TComplaints() {
   const [list, , load] = useFetch('/api/tenant/me');
   const [rows, setRows] = useState([]);
   const [f, setF] = useState({ category: 'PLUMBING', title: '', description: '' });
+  const [file, setFile] = useState(null);
   const [msg, setMsg] = useState(null);
   const loadList = async () => { try { const r = await api.get('/api/complaints'); setRows(r.filter((x) => x.tenant_id === me?.tenant?.tenant_id)); } catch {} };
   useEffect(() => { if (me) loadList(); }, [me]);
@@ -337,23 +402,47 @@ function TComplaints() {
     <Field label="Category"><select value={f.category} onChange={(e) => setF({ ...f, category: e.target.value })}><option>ELECTRICITY</option><option>WATER</option><option>PLUMBING</option><option>AC</option><option>FURNITURE</option><option>INTERNET</option><option>CLEANING</option><option>SECURITY</option><option>OTHER</option></select></Field>
     <Field label="Title" error={need(f.title)}><input value={f.title} onChange={(e) => setF({ ...f, title: e.target.value })} /></Field>
     <Field label="Description"><textarea value={f.description} onChange={(e) => setF({ ...f, description: e.target.value })} /></Field>
+    <Field label="Photo (JPG, PNG, WEBP or PDF, optional)"><input type="file" accept=".jpg,.jpeg,.png,.webp,.pdf,.mp4" onChange={(e) => setFile(e.target.files[0] || null)} /></Field>
     {msg ? <div className="notice">{msg}</div> : null}
     <p><button className="primary" onClick={async () => {
-      try { if (need(f.title)) { setMsg('Title is required.'); return; } await api.post('/api/complaints', { property_id: me.agreement?.property_id, category: f.category, title: f.title, description: f.description }); setMsg('Complaint filed.'); setF({ category: 'PLUMBING', title: '', description: '' }); loadList(); } catch (e) { setMsg(e.message); }
+      try {
+        if (need(f.title)) { setMsg('Title is required.'); return; }
+        let attachment_path = null;
+        if (file) { setMsg('Uploading photo.'); attachment_path = (await uploadFile(file)).file_path; }
+        await api.post('/api/complaints', { property_id: me.agreement?.property_id, category: f.category, title: f.title, description: f.description, attachment_path });
+        setMsg('Complaint filed.'); setF({ category: 'PLUMBING', title: '', description: '' }); setFile(null); loadList();
+      } catch (e) { setMsg(e.message); }
     }}>File complaint</button></p>
-    <table className="grid"><thead><tr><th>No</th><th>Title</th><th>Status</th></tr></thead><tbody>
-      {rows.map((c) => <tr key={c.complaint_id}><td>{c.complaint_number}</td><td>{c.title}</td><td><span className="tag">{c.status}</span></td></tr>)}</tbody></table>
+    <table className="grid"><thead><tr><th>No</th><th>Title</th><th>Status</th><th>Files</th></tr></thead><tbody>
+      {rows.map((c) => <tr key={c.complaint_id}><td>{c.complaint_number}</td><td>{c.title}</td><td><span className="tag">{c.status}</span></td><td>{c.files || 0}</td></tr>)}</tbody></table>
   </div>);
 }
 function TDocs() {
-  const [d] = useFetch('/api/tenant/documents');
+  const [d, , load] = useFetch('/api/tenant/documents');
+  const [up, setUp] = useState({ document_type: 'AADHAAR', document_number: '' });
+  const [file, setFile] = useState(null);
+  const [msg, setMsg] = useState(null);
   if (!d) return <p>Loading.</p>;
   return (<div><h1>Documents.</h1><p className="sub">Agreement, KYC record and uploaded ID proofs.</p>
     <p>KYC status: <span className="tag">{d.kyc?.status || 'KYC_PENDING'}</span></p>
+    <h2>Upload a document.</h2>
+    <div className="form-grid">
+      <Field label="Type"><select value={up.document_type} onChange={(e) => setUp({ ...up, document_type: e.target.value })}><option>AADHAAR</option><option>PAN</option><option>PASSPORT</option><option>DRIVING_LICENSE</option><option>ADDRESS_PROOF</option><option>EMPLOYMENT_PROOF</option><option>PHOTO</option><option>OTHER</option></select></Field>
+      <Field label="Number"><input value={up.document_number} onChange={(e) => setUp({ ...up, document_number: e.target.value })} /></Field></div>
+    <Field label="File"><input type="file" accept=".jpg,.jpeg,.png,.webp,.pdf" onChange={(e) => setFile(e.target.files[0] || null)} /></Field>
+    {msg ? <div className="notice">{msg}</div> : null}
+    <p><button className="primary" onClick={async () => {
+      try {
+        if (!file) { setMsg('Pick a file first.'); return; }
+        const r = await uploadFile(file);
+        await api.post('/api/tenant/documents', { document_type: up.document_type, document_number: up.document_number || null, file_path: r.file_path });
+        setMsg('Uploaded. The office will verify it.'); setFile(null); load();
+      } catch (e) { setMsg(e.message); }
+    }}>Upload</button></p>
     <h2>Agreements.</h2><table className="grid"><thead><tr><th>No</th><th>Status</th><th>Period</th></tr></thead><tbody>
       {(d.agreements || []).map((a) => <tr key={a.agreement_id}><td>{a.agreement_number}</td><td>{a.status}</td><td>{fmtDate(a.start_date)} to {fmtDate(a.end_date)}</td></tr>)}</tbody></table>
     <h2>ID documents.</h2><table className="grid"><thead><tr><th>Type</th><th>Status</th><th>File</th></tr></thead><tbody>
-      {(d.documents || []).map((x) => <tr key={x.tenant_document_id}><td>{x.document_type}</td><td>{x.verification_status}</td><td>{x.file_path}</td></tr>)}</tbody></table>
+      {(d.documents || []).map((x) => <tr key={x.tenant_document_id}><td>{x.document_type}</td><td>{x.verification_status}</td><td><a href={x.file_path} target="_blank" rel="noreferrer">Open</a></td></tr>)}</tbody></table>
   </div>);
 }
 function TNotices() {

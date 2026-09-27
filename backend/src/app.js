@@ -13,6 +13,10 @@ const app = express();
 app.use(cors());
 app.use(express.json({ limit: '2mb' }));
 const JWT_SECRET = process.env.JWT_SECRET || 'dev-secret-change-me';
+if (process.env.NODE_ENV === 'production' && !process.env.JWT_SECRET) {
+  console.error('FATAL: JWT_SECRET must be set when NODE_ENV=production. Refusing to start.');
+  process.exit(1);
+}
 const PORT = process.env.PORT || 4000;
 
 // ---------- helpers ----------
@@ -77,12 +81,24 @@ app.post('/api/auth/login', (req, res) => {
 });
 
 // Tenant OTP: request + verify. Demo returns OTP in response (no SMS vendor in v1).
-app.post('/api/auth/tenant/request-otp', (req, res) => {
+app.post('/api/auth/tenant/request-otp', async (req, res) => {
   const { mobile } = req.body || {};
   const t = db.prepare(`SELECT * FROM tenants WHERE mobile = ?`).get(mobile);
   if (!t) return res.status(404).json({ error: 'Tenant mobile not registered' });
   const code = String(Math.floor(100000 + Math.random() * 900000));
   db.prepare(`INSERT INTO tenant_otps (mobile, otp_code, expires_at) VALUES (?,?,datetime('now','+10 minutes'))`).run(mobile, code);
+  // Demo mode returns the OTP directly so the flow works without an SMS vendor.
+  // In production the OTP is only ever sent through the SMS seam, never in
+  // the response. Without SMS_WEBHOOK_URL configured, this endpoint refuses.
+  if (process.env.NODE_ENV === 'production') {
+    const events = require('./events');
+    try {
+      await events.smsProviders.sendSms(mobile, `Your Rent Ledger login code is ${code}. It expires in 10 minutes.`);
+      return res.json({ message: 'OTP sent by SMS.' });
+    } catch (e) {
+      return res.status(502).json({ error: 'SMS delivery is not configured (' + e.message + '). Set SMS_WEBHOOK_URL.' });
+    }
+  }
   res.json({ message: 'OTP generated (demo mode, returned directly).', otp: code });
 });
 app.post('/api/auth/tenant/verify-otp', (req, res) => {
@@ -272,9 +288,17 @@ app.get('/api/statements/:tenantId', auth(), requirePerm('RENT', 'view'), (req, 
 
 // Complaints (admin side)
 app.get('/api/complaints', auth(), requirePerm('COMPLAINT', 'view'), (req, res) => {
-  res.json(db.prepare(`SELECT c.*, t.full_name AS tenant_name, p.property_name FROM complaints c
+  res.json(db.prepare(`SELECT c.*, t.full_name AS tenant_name, p.property_name,
+      (SELECT COUNT(*) FROM documents d WHERE d.entity_type = 'complaint' AND d.entity_id = c.complaint_id) AS files
+    FROM complaints c
     LEFT JOIN tenants t ON t.tenant_id = c.tenant_id LEFT JOIN properties p ON p.property_id = c.property_id
     ORDER BY c.complaint_id DESC LIMIT 500`).all());
+});
+app.get('/api/complaints/:id', auth(), requirePerm('COMPLAINT', 'view'), (req, res) => {
+  const c = db.prepare(`SELECT * FROM complaints WHERE complaint_id = ?`).get(req.params.id);
+  if (!c) return res.status(404).json({ error: 'Not found' });
+  c.attachments = db.prepare(`SELECT * FROM documents WHERE entity_type = 'complaint' AND entity_id = ?`).all(req.params.id);
+  res.json(c);
 });
 app.post('/api/complaints', auth(), (req, res) => {
   // Tenant token OR staff with COMPLAINT add.
@@ -285,6 +309,13 @@ app.post('/api/complaints', auth(), (req, res) => {
     const n = `CMP-${new Date().toISOString().slice(0, 10).replace(/-/g, '')}-${String(Date.now()).slice(-5)}`;
     const info = db.prepare(`INSERT INTO complaints (tenant_id, property_id, unit_id, complaint_number, category, title, description, priority, status)
       VALUES (?,?,?,?,?,?,?,?,'OPEN')`).run(tenantId, b.property_id, b.unit_id || null, n, b.category, b.title, b.description || null, b.priority || 'MEDIUM');
+    // Photo/video attachments live in documents, linked to the complaint.
+    const paths = [b.attachment_path, ...(b.attachment_paths || [])].filter(Boolean);
+    const actorId = req.auth.kind === 'tenant' ? null : (req.auth.userId || null);
+    for (const p of paths) {
+      db.prepare(`INSERT INTO documents (document_type, entity_type, entity_id, file_name, file_path, uploaded_by)
+        VALUES ('COMPLAINT_PHOTO','complaint',?,?,?,?)`).run(info.lastInsertRowid, String(p).split('/').pop(), p, actorId);
+    }
     audit(req.auth.userId || null, 'COMPLAINT', 'CREATE', 'complaints', info.lastInsertRowid, null, b, req);
     res.status(201).json({ complaint_id: info.lastInsertRowid, complaint_number: n });
   } catch (e) { res.status(400).json({ error: e.message }); }
@@ -365,7 +396,7 @@ app.get('/api/tenant/invoices', tAuth, needTenant, (req, res) => {
   res.json(db.prepare(`SELECT * FROM rent_invoices WHERE tenant_id = ? ORDER BY invoice_id DESC`).all(req.auth.tenantId));
 });
 app.get('/api/tenant/payments', tAuth, needTenant, (req, res) => {
-  res.json(db.prepare(`SELECT p.*, r.receipt_number FROM payments p LEFT JOIN receipts r ON r.payment_id = p.payment_id
+  res.json(db.prepare(`SELECT p.*, r.receipt_number, r.receipt_id FROM payments p LEFT JOIN receipts r ON r.payment_id = p.payment_id
     WHERE p.tenant_id = ? ORDER BY p.payment_id DESC`).all(req.auth.tenantId));
 });
 app.get('/api/tenant/documents', tAuth, needTenant, (req, res) => {
@@ -374,6 +405,78 @@ app.get('/api/tenant/documents', tAuth, needTenant, (req, res) => {
   const agr = db.prepare(`SELECT agreement_id, agreement_number, status, start_date, end_date FROM rental_agreements WHERE tenant_id = ?`).all(req.auth.tenantId);
   res.json({ documents: docs, kyc: kyc || null, agreements: agr });
 });
+app.post('/api/tenant/documents', tAuth, needTenant, (req, res) => {
+  const { document_type, document_number, file_path } = req.body || {};
+  const allowed = ['AADHAAR','PAN','PASSPORT','DRIVING_LICENSE','ADDRESS_PROOF','EMPLOYMENT_PROOF','PHOTO','OTHER'];
+  if (!allowed.includes(document_type) || !file_path) return res.status(400).json({ error: 'document_type and file_path (from /api/uploads) are required' });
+  try {
+    const info = db.prepare(`INSERT INTO tenant_documents (tenant_id, document_type, document_number, file_path, verification_status)
+      VALUES (?,?,?,?,'PENDING')`).run(req.auth.tenantId, document_type, document_number || null, file_path);
+    audit(null, 'TENANT', 'DOC_UPLOAD', 'tenant_documents', info.lastInsertRowid, null, req.body, req);
+    res.status(201).json({ tenant_document_id: info.lastInsertRowid });
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+app.get('/api/tenant/statement', tAuth, needTenant, (req, res) => {
+  const { from = '2000-01-01', to = '2100-01-01' } = req.query;
+  res.json(svc.tenantStatement(req.auth.tenantId, from, to));
+});
+function receiptDetail(receiptId) {
+  const r = db.prepare(`SELECT * FROM receipts WHERE receipt_id = ?`).get(receiptId);
+  if (!r) return null;
+  const p = db.prepare(`SELECT * FROM payments WHERE payment_id = ?`).get(r.payment_id);
+  const inv = p ? db.prepare(`SELECT * FROM rent_invoices WHERE invoice_id = ?`).get(p.invoice_id) : null;
+  const tenant = p ? db.prepare(`SELECT * FROM tenants WHERE tenant_id = ?`).get(p.tenant_id) : null;
+  const ag = inv ? db.prepare(`SELECT * FROM rental_agreements WHERE agreement_id = ?`).get(inv.agreement_id) : null;
+  const prop = ag ? db.prepare(`SELECT * FROM properties WHERE property_id = ?`).get(ag.property_id) : null;
+  const org = prop ? db.prepare(`SELECT * FROM organizations WHERE organization_id = ?`).get(prop.organization_id) : null;
+  return { receipt: r, payment: p, invoice: inv, tenant, agreement: ag, property: prop, organization: org };
+}
+app.get('/api/receipts/:id', auth(), requirePerm('PAYMENT', 'view'), (req, res) => {
+  const d = receiptDetail(req.params.id);
+  if (!d) return res.status(404).json({ error: 'Not found' });
+  res.json(d);
+});
+app.get('/api/tenant/receipts/:id', tAuth, needTenant, (req, res) => {
+  const d = receiptDetail(req.params.id);
+  if (!d) return res.status(404).json({ error: 'Not found' });
+  if (!d.payment || d.payment.tenant_id !== req.auth.tenantId) return res.status(403).json({ error: 'Not your receipt' });
+  res.json(d);
+});
+
+// Health check for orchestrators and uptime monitors (no auth).
+app.get('/api/health', (req, res) => {
+  try {
+    db.prepare('SELECT 1 AS ok').get();
+    res.json({ ok: true, service: 'prm-backend', time: new Date().toISOString() });
+  } catch (e) { res.status(500).json({ ok: false, error: 'database unreachable' }); }
+});
+
+// ---------- file uploads (complaint photos, KYC documents) ----------
+const path = require('path');
+const fs = require('fs');
+const multer = require('multer');
+const UPLOAD_DIR = process.env.UPLOAD_DIR || path.join(__dirname, '..', 'uploads');
+fs.mkdirSync(UPLOAD_DIR, { recursive: true });
+const upload = multer({
+  dest: UPLOAD_DIR,
+  limits: { fileSize: 10 * 1024 * 1024 },
+  fileFilter: (req, file, cb) => {
+    const okTypes = ['image/jpeg', 'image/png', 'image/webp', 'application/pdf', 'video/mp4'];
+    if (okTypes.includes(file.mimetype)) cb(null, true);
+    else cb(new Error('Only JPG, PNG, WEBP, PDF or MP4 files are accepted'));
+  },
+});
+app.post('/api/uploads', auth(), upload.single('file'), (req, res) => {
+  if (!req.file) return res.status(400).json({ error: 'No file received' });
+  const ext = path.extname(req.file.originalname || '').toLowerCase();
+  const name = req.file.filename + ext;
+  fs.renameSync(req.file.path, path.join(UPLOAD_DIR, name));
+  const actor = req.auth.kind === 'tenant' ? `tenant:${req.auth.tenantId}` : `user:${req.auth.userId}`;
+  audit(req.auth.userId || null, 'DOCUMENT', 'UPLOAD', 'documents', null,
+    null, { file: req.file.originalname, stored: name, by: actor }, req);
+  res.status(201).json({ file_path: '/uploads/' + name, file_name: req.file.originalname, mime_type: req.file.mimetype, file_size: req.file.size });
+});
+app.use('/uploads', require('express').static(UPLOAD_DIR));
 
 // ---------- scheduler (cron, runs even with no admin logged in) ----------
 cron.schedule('0 1 1 * *', () => {
@@ -389,8 +492,6 @@ cron.schedule('0 2 * * *', () => {
 });
 
 // Serve frontend build if present
-const path = require('path');
-const fs = require('fs');
 const dist = path.join(__dirname, '..', '..', 'frontend', 'dist');
 if (fs.existsSync(dist)) {
   app.use(express.static(dist));

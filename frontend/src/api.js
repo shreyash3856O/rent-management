@@ -17,6 +17,15 @@ export const api = {
   put: (p, b) => req(p, { method: 'PUT', body: JSON.stringify(b || {}) }),
   del: (p, confirm) => req(p + (confirm ? '?confirm=true' : ''), { method: 'DELETE' }),
 };
+export async function uploadFile(file) {
+  const token = localStorage.getItem('prm_token');
+  const fd = new FormData();
+  fd.append('file', file);
+  const res = await fetch('/api/uploads', { method: 'POST', headers: { ...(token ? { Authorization: 'Bearer ' + token } : {}) }, body: fd });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || 'Upload failed');
+  return data;
+}
 export function money(n) {
   const v = Number(n || 0);
   return 'Rs.' + v.toLocaleString('en-IN', { maximumFractionDigits: 2 });

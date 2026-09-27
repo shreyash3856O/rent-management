@@ -49,4 +49,18 @@ const dash = await call('GET', '/api/dashboard/summary', null, T);
 ok(dash.units.total >= 2 && dash.finance.expected > 0, 'dashboard summary');
 const audit = await call('GET', '/api/audit-logs', null, T);
 ok(audit.length >= 3, `audit log has ${audit.length} entries`);
+// new: health, uploads guard, receipt detail, tenant statement, complaint files
+const health = await call('GET', '/api/health');
+ok(health.ok === true, 'health endpoint');
+const rc = await call('GET', '/api/receipts', null, T);
+const rdet = await call('GET', `/api/receipts/${rc[0].receipt_id}`, null, T);
+ok(rdet.organization && rdet.invoice && rdet.payment, 'receipt detail with org+invoice+payment');
+const trc = await call('GET', `/api/tenant/receipts/${rc[0].receipt_id}`, null, TT);
+ok(trc.receipt.receipt_id === rc[0].receipt_id, 'tenant can open own receipt');
+const stmt = await call('GET', '/api/tenant/statement?from=2026-01-01&to=2026-12-31', null, TT);
+ok(Array.isArray(stmt) && stmt.length >= 2, `tenant statement has ${stmt.length} rows`);
+const cdet = await call('GET', `/api/complaints/${comp.complaint_id}`, null, T);
+ok(Array.isArray(cdet.attachments), 'complaint detail with attachments');
+try { await call('POST', '/api/uploads', {}, T); ok(false, 'empty upload rejected'); }
+catch { ok(true, 'empty upload rejected'); }
 console.log('E2E done.');
