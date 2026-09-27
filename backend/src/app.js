@@ -535,9 +535,13 @@ app.get('/api/message-logs', auth(), requirePerm('REPORTS', 'view'), async (req,
 app.get('/api/diag/email', auth(), requirePerm('REPORTS', 'view'), async (req, res) => {
   const events = require('./events');
   const brevoKey = String(process.env.BREVO_API_KEY || '').trim();
+  const keyType = brevoKey.startsWith('xkeysib-') ? 'api-key'
+    : brevoKey.startsWith('xsmtpsib-') ? 'smtp-password (wrong type: generate an API key in Brevo, not an SMTP credential)'
+    : (brevoKey ? 'unrecognized' : 'missing');
   res.json({
     brevoKeyPresent: brevoKey.length > 0,
     brevoKeyLength: brevoKey.length,
+    keyType,
     sender: String(process.env.BREVO_SENDER || '').trim() || null,
     smtpHost: process.env.SMTP_HOST || null,
     probe: await events.probeBrevo(),

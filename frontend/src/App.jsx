@@ -559,7 +559,7 @@ function Audit() {
       {(list || []).map((a) => <tr key={a.audit_id}><td>{a.created_at}</td><td>{a.user_id}</td><td>{a.module_name}</td><td>{a.action}</td><td>{a.entity_type} {a.entity_id}</td></tr>)}</tbody></table>
     <h2>Mail delivery.</h2><p className="sub">SENT reached the mailbox. PENDING means mail is not configured (set SMTP on the server). FAILED carries the provider reason.</p>
     <div className="toolbar"><button onClick={testMail}>Test mail connection</button></div>
-    {diag ? <div className="notice">Key present: {diag.brevoKeyPresent ? `yes (${diag.brevoKeyLength} chars)` : 'no'}. Sender: {diag.sender || 'not set'}. Reachability: {diag.probe.ok ? `Brevo answers (HTTP ${diag.probe.status}, ${diag.probe.note})` : `unreachable: ${diag.probe.note}`}{diag.error ? ` Error: ${diag.error}` : ''}</div> : null}
+    {diag ? <div className="notice">Key: {diag.brevoKeyPresent ? `present (${diag.brevoKeyLength} chars, ${diag.keyType})` : 'missing'}. Sender: {diag.sender || 'not set'}. Reachability: {diag.probe.ok ? `Brevo answers (HTTP ${diag.probe.status}, ${diag.probe.note})` : `unreachable: ${diag.probe.note}`}{diag.error ? ` Error: ${diag.error}` : ''}</div> : null}
     <table className="grid"><thead><tr><th>When</th><th>To</th><th>Subject</th><th>Status</th><th>Detail</th></tr></thead><tbody>
       {((logs && logs.emails) || []).map((e) => <tr key={e.email_id}><td>{e.sent_at}</td><td>{e.email_address}</td><td>{e.subject}</td><td><span className="tag">{e.status}</span></td><td>{e.response}</td></tr>)}</tbody></table>
     <h2>Text delivery.</h2>

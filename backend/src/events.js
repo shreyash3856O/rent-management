@@ -101,7 +101,7 @@ async function sendViaBrevo(address, subject, message) {
     sender = m ? m[1] : process.env.SMTP_FROM;
   }
   if (!sender) throw new Error('BREVO_SENDER is not set (verify a sender in Brevo first)');
-  const r = await fetch('https://api.smtp.brevo.com/v3/smtp/email', {
+  const r = await fetch('https://api.brevo.com/v3/smtp/email', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'api-key': key },
     body: JSON.stringify({
@@ -183,7 +183,7 @@ async function dispatch({ eventCode, tenantId = null, userId = null, vars = {} }
 // independent of any key. Returns { ok, status } for the diagnostics UI.
 async function probeBrevo() {
   try {
-    const r = await fetch('https://api.smtp.brevo.com/v3/account', { method: 'GET' });
+    const r = await fetch('https://api.brevo.com/v3/account', { method: 'GET' });
     await r.text().catch(() => '');
     return { ok: true, status: r.status, note: r.status === 401 ? 'reachable, needs a valid key' : 'reachable' };
   } catch (e) {
