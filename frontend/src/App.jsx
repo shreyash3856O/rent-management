@@ -1,16 +1,24 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useCallback } from 'react';
 import { BrowserRouter, Routes, Route, Link, NavLink, useNavigate, useLocation, useParams, Navigate } from 'react-router-dom';
 import { api, money, fmtDate, uploadFile, fileUrl, busy, withBusy } from './api.js';
 
 function useFetch(path, deps = []) {
   const [data, setData] = useState(null);
   const [err, setErr] = useState(null);
-  const load = () => {
+  const load = useCallback(() => {
     setErr(null);
     api.get(path).then(setData).catch((e) => setErr(e.message));
-  };
-  useEffect(load, deps);
+  }, [path]);
+  useEffect(load, [load, ...deps]);
   return [data, err, load, setData];
+}
+// Refetch a list whenever the tab regains focus, so dropdowns never show
+// yesterday's data after work done in another tab.
+function useFocusReload(load) {
+  useEffect(() => {
+    window.addEventListener('focus', load);
+    return () => window.removeEventListener('focus', load);
+  }, [load]);
 }
 function Field({ label, error, children }) {
   return (<div><label>{label}</label>{children}{error ? <div className="field-err">{error}</div> : null}</div>);
@@ -182,6 +190,7 @@ function Hierarchy() {
 function Tenants() {
   const [list, , load] = useFetch('/api/tenants');
   const [kyc, , loadKyc] = useFetch('/api/kyc');
+  useFocusReload(load);
   const [f, setF] = useState({ full_name: '', mobile: '', email: '' });
   const [err, setErr] = useState(null);
   const [note, setNote] = useState(null);
@@ -345,9 +354,12 @@ function RentPlans() {
 }
 function Agreements() {
   const [list, , load] = useFetch('/api/agreements');
-  const [tenants] = useFetch('/api/tenants');
-  const [props] = useFetch('/api/properties');
-  const [plans] = useFetch('/api/rent-plans');
+  const [tenants, , loadTenants] = useFetch('/api/tenants');
+  const [props, , loadProps] = useFetch('/api/properties');
+  const [plans, , loadPlans] = useFetch('/api/rent-plans');
+  const reloadLists = useCallback(() => { loadTenants(); loadProps(); loadPlans(); load(); }, [loadTenants, loadProps, loadPlans, load]);
+  useFocusReload(reloadLists);
+  const num = (v, d = 0) => (v === '' || v == null ? d : Number(v));
   const [f, setF] = useState({ tenant_id: '', property_id: '', agreement_number: '', start_date: '', monthly_rent: '', rent_plan_id: '', other_charges: '', due_day: '5', security_deposit: '', status: 'ACTIVE' });
   const [editing, setEditing] = useState(null);
   const [err, setErr] = useState(null);
@@ -356,6 +368,7 @@ function Agreements() {
   const setE = (k, v) => setEditing({ ...editing, [k]: v });
   const num = (v, d = 0) => (v === '' || v == null ? d : Number(v));
   return (<div><h1>Rental agreements.</h1><p className="sub">Activating marks the linked bed or room Occupied. Terminating releases it. Rent and charges feed every future invoice.</p>
+    <div className="toolbar"><button onClick={reloadLists}>Reload lists</button></div>
     <div className="form-grid">
       <Field label="Tenant"><select value={f.tenant_id} onChange={(e) => set('tenant_id', e.target.value)}><option value="">Select</option>{(tenants || []).map((t) => <option key={t.tenant_id} value={t.tenant_id}>{t.full_name}</option>)}</select></Field>
       <Field label="Property"><select value={f.property_id} onChange={(e) => set('property_id', e.target.value)}><option value="">Select</option>{(props || []).map((p) => <option key={p.property_id} value={p.property_id}>{p.property_name}</option>)}</select></Field>
@@ -408,6 +421,7 @@ function Agreements() {
 }
 function Invoices() {
   const [list, , load] = useFetch('/api/invoices');
+  useFocusReload(load);
   const [month, setMonth] = useState(() => new Date().toISOString().slice(0, 7) + '-01');
   const [msg, setMsg] = useState(null);
   const [pay, setPay] = useState({ invoice_id: '', amount: '', payment_mode: 'UPI', payment_reference: '' });

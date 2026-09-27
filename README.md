@@ -87,7 +87,7 @@ per channel log tables, so delivery is auditable either way.
 | Channel | Status |
 |---|---|
 | In-app | Real. Written to `notifications`, visible in the tenant Notices tab. |
-| Email | Real when `SMTP_HOST` (plus user, pass, from) is set, sent via SMTP on every billing event. Without SMTP config it logs to console and `email_logs` as `STUB_CONSOLE`, so demos work with zero setup. `email_logs` records `SENT`, `FAILED`, or `STUB_CONSOLE` with the provider message id or error. |
+| Email | Real when `BREVO_API_KEY` plus `BREVO_SENDER` is set (HTTP API, works everywhere including free hosts), or when `SMTP_HOST` (plus user, pass, from) is set on a host with SMTP egress. Sent on every billing event. Without either it logs to console and `email_logs` as `STUB_CONSOLE`, so demos work with zero setup. `email_logs` records `SENT`, `FAILED`, or `STUB_CONSOLE` with the provider message id or error. The Audit log page shows a delivery table, so missing mail is diagnosable from the UI. |
 | SMS | Seam is live, vendor is not bundled. Set `SMS_WEBHOOK_URL` (a gateway accepting `POST {to, message}`) and texts, including tenant OTPs, actually send. Without it, rows stay `PENDING_STUB` in `sms_logs`. This matches the brief: no SMS vendor in v1, clean hook ready. |
 | WhatsApp | Tables plus provider stub only, per the brief (explicitly out of v1 scope). Same webhook pattern fits when needed. |
 

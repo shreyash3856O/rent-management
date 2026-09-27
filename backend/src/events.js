@@ -60,6 +60,16 @@ function getTransport() {
 }
 
 async function sendEmail(address, subject, message) {
+  // HTTP providers first: they use port 443, which free hosts never block,
+  // unlike outbound SMTP (port 587), which many free tiers block entirely.
+  if (process.env.BREVO_API_KEY) {
+    try {
+      const id = await sendViaBrevo(address, subject, message);
+      return { status: 'SENT', detail: `brevo=${id}` };
+    } catch (e) {
+      return { status: 'FAILED', detail: e.message };
+    }
+  }
   const tx = getTransport();
   if (!tx) {
     console.log(`[EMAIL-STUB] to=${address} subject=${subject} msg=${message}`);
@@ -71,6 +81,31 @@ async function sendEmail(address, subject, message) {
   } catch (e) {
     return { status: 'FAILED', detail: e.message };
   }
+}
+
+// Brevo transactional HTTP API (free 300/day). Verify one sender address
+// (even a Gmail) in the Brevo dashboard, create an API key, and set
+// BREVO_API_KEY plus BREVO_SENDER. No domain or SMTP ports needed.
+async function sendViaBrevo(address, subject, message) {
+  let sender = process.env.BREVO_SENDER || '';
+  if (!sender && process.env.SMTP_FROM) {
+    const m = String(process.env.SMTP_FROM).match(/<(.*)>/);
+    sender = m ? m[1] : process.env.SMTP_FROM;
+  }
+  if (!sender) throw new Error('BREVO_SENDER is not set (verify a sender in Brevo first)');
+  const r = await fetch('https://api.smtp.brevo.com/v3/smtp/email', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'api-key': process.env.BREVO_API_KEY },
+    body: JSON.stringify({
+      sender: { email: sender, name: 'Rent Ledger' },
+      to: [{ email: address }],
+      subject,
+      textContent: message,
+    }),
+  });
+  if (!r.ok) throw new Error(`Brevo HTTP ${r.status}: ${(await r.text()).slice(0, 200)}`);
+  const j = await r.json().catch(() => ({}));
+  return j.messageId || 'accepted';
 }
 
 async function dispatch({ eventCode, tenantId = null, userId = null, vars = {} }) {
