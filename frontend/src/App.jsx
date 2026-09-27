@@ -366,7 +366,6 @@ function Agreements() {
   const [note, setNote] = useState(null);
   const set = (k, v) => setF({ ...f, [k]: v });
   const setE = (k, v) => setEditing({ ...editing, [k]: v });
-  const num = (v, d = 0) => (v === '' || v == null ? d : Number(v));
   return (<div><h1>Rental agreements.</h1><p className="sub">Activating marks the linked bed or room Occupied. Terminating releases it. Rent and charges feed every future invoice.</p>
     <div className="toolbar"><button onClick={reloadLists}>Reload lists</button></div>
     <div className="form-grid">

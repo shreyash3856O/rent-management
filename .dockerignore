@@ -1,0 +1,13 @@
+node_modules
+dist
+data
+uploads
+*.log
+.git
+.gitignore
+.env
+backend/data
+backend/uploads
+backend/node_modules
+frontend/node_modules
+frontend/dist
