@@ -353,10 +353,10 @@ function RentPlans() {
   </div>);
 }
 function Agreements() {
-  const [list, , load] = useFetch('/api/agreements');
-  const [tenants, , loadTenants] = useFetch('/api/tenants');
-  const [props, , loadProps] = useFetch('/api/properties');
-  const [plans, , loadPlans] = useFetch('/api/rent-plans');
+  const [list, listErr, load] = useFetch('/api/agreements');
+  const [tenants, tenantsErr, loadTenants] = useFetch('/api/tenants');
+  const [props, propsErr, loadProps] = useFetch('/api/properties');
+  const [plans, plansErr, loadPlans] = useFetch('/api/rent-plans');
   const reloadLists = useCallback(() => { loadTenants(); loadProps(); loadPlans(); load(); }, [loadTenants, loadProps, loadPlans, load]);
   useFocusReload(reloadLists);
   const num = (v, d = 0) => (v === '' || v == null ? d : Number(v));
@@ -367,7 +367,8 @@ function Agreements() {
   const set = (k, v) => setF({ ...f, [k]: v });
   const setE = (k, v) => setEditing({ ...editing, [k]: v });
   return (<div><h1>Rental agreements.</h1><p className="sub">Activating marks the linked bed or room Occupied. Terminating releases it. Rent and charges feed every future invoice.</p>
-    <div className="toolbar"><button onClick={reloadLists}>Reload lists</button></div>
+    <div className="toolbar"><button onClick={reloadLists}>Reload lists</button><span className="sub">{(tenants || []).length} tenants, {(props || []).length} properties loaded.</span></div>
+    {(listErr || tenantsErr || propsErr || plansErr) ? <div className="field-err">Lists failed to load ({listErr || tenantsErr || propsErr || plansErr}). Press Reload lists.</div> : null}
     <div className="form-grid">
       <Field label="Tenant"><select value={f.tenant_id} onChange={(e) => set('tenant_id', e.target.value)}><option value="">Select</option>{(tenants || []).map((t) => <option key={t.tenant_id} value={t.tenant_id}>{t.full_name}</option>)}</select></Field>
       <Field label="Property"><select value={f.property_id} onChange={(e) => set('property_id', e.target.value)}><option value="">Select</option>{(props || []).map((p) => <option key={p.property_id} value={p.property_id}>{p.property_name}</option>)}</select></Field>
