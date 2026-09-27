@@ -107,20 +107,23 @@ app.post('/api/auth/tenant/request-otp', async (req, res) => {
   const t = await db.prepare(`SELECT * FROM tenants WHERE mobile = ?`).get(mobile);
   if (!t) return res.status(404).json({ error: 'Tenant mobile not registered' });
   const code = String(Math.floor(100000 + Math.random() * 900000));
-  await db.prepare(`INSERT INTO tenant_otps (mobile, otp_code, expires_at) VALUES (?,?,datetime('now','+10 minutes'))`).run(mobile, code);
-  // Demo mode returns the OTP directly so the flow works without an SMS vendor.
-  // In production the OTP is only ever sent through the SMS seam, never in
-  // the response. Without SMS_WEBHOOK_URL configured, this endpoint refuses.
-  if (process.env.NODE_ENV === 'production') {
-    const events = require('./events');
-    try {
-      await events.smsProviders.sendSms(mobile, `Your Rent Ledger login code is ${code}. It expires in 10 minutes.`);
-      return res.json({ message: 'OTP sent by SMS.' });
-    } catch (e) {
-      return res.status(502).json({ error: 'SMS delivery is not configured (' + e.message + '). Set SMS_WEBHOOK_URL.' });
-    }
+  // No SMS vendor connected: fixed demo code so tenants can always sign in.
+  // WARNING: anyone who knows a tenant's mobile can log in while this is on.
+  // Setting SMS_WEBHOOK_URL switches to random one-time codes automatically.
+  if (!process.env.SMS_WEBHOOK_URL) {
+    await db.prepare(`DELETE FROM tenant_otps WHERE mobile = ? AND consumed = 0`).run(mobile);
+    await db.prepare(`INSERT INTO tenant_otps (mobile, otp_code, expires_at) VALUES (?,?,datetime('now','+10 minutes'))`).run(mobile, '8520');
+    return res.json({ message: 'SMS not connected. Demo code 8520 is active.', otp: '8520' });
   }
-  res.json({ message: 'OTP generated (demo mode, returned directly).', otp: code });
+  await db.prepare(`INSERT INTO tenant_otps (mobile, otp_code, expires_at) VALUES (?,?,datetime('now','+10 minutes'))`).run(mobile, code);
+  // SMS configured: random code, delivered by text, never in the response.
+  const events = require('./events');
+  try {
+    await events.smsProviders.sendSms(mobile, `Your Rent Ledger login code is ${code}. It expires in 10 minutes.`);
+    return res.json({ message: 'OTP sent by SMS.' });
+  } catch (e) {
+    return res.status(502).json({ error: 'SMS delivery failed (' + e.message + ').' });
+  }
 });
 app.post('/api/auth/tenant/verify-otp', async (req, res) => {
   const { mobile, otp } = req.body || {};

@@ -39,6 +39,7 @@ const changed = unitsAfter.find((u) => u.unit_id === availUnit.unit_id);
 ok(['OCCUPIED', 'PARTIALLY_OCCUPIED'].includes(changed.status), `agreement activation flips unit to ${changed.status}`);
 // tenant OTP + self service
 const otpReq = await call('POST', '/api/auth/tenant/request-otp', { mobile: '9000000001' });
+ok(otpReq.otp === '8520', 'demo OTP is 8520 without SMS');
 const otpVerify = await call('POST', '/api/auth/tenant/verify-otp', { mobile: '9000000001', otp: otpReq.otp });
 ok(!!otpVerify.token, 'tenant OTP login');
 const TT = otpVerify.token;

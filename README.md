@@ -65,7 +65,7 @@ behind any reverse proxy.
 Demo logins (seeded):
 
 - Admin: `admin@abcproperty.com` / `admin123` (also owner, manager, accountant on `*@abcproperty.com` / `admin123`).
-- Tenant: mobile `9000000001`. Request OTP, then enter the OTP shown on screen (demo mode returns it directly, since no SMS vendor is wired in v1).
+- Tenant: mobile `9000000001`, code `8520`. The demo code stays fixed until `SMS_WEBHOOK_URL` is set, at which point logins switch to random codes sent by text.
 
 ## Demo script (matches success criteria)
 

@@ -64,7 +64,7 @@ function TenantLogin() {
   const [err, setErr] = useState(null);
   return (<div className="login-wrap">
     <h1>Rent Ledger. Tenant sign in.</h1>
-    <p className="sub">Step 1, request OTP. Step 2, enter OTP. Demo OTP is shown on screen.</p>
+    <p className="sub">Step 1, request OTP. Step 2, enter OTP. While no SMS vendor is connected, the demo code is 8520.</p>
     <Field label="Mobile" error={mobileErr(mobile)}><input inputMode="numeric" maxLength={10} value={mobile} onChange={(e) => setMobile(e.target.value.replace(/\D/g, '').slice(0, 10))} /></Field>
     <p><button onClick={async () => { try { const r = await withBusy('Requesting OTP.', async () => api.post('/api/auth/tenant/request-otp', { mobile })); setSent(r.otp); setErr(null); } catch (e) { setErr(e.message); } }}>Request OTP</button></p>
     {sent ? <div className="notice">Demo OTP for {mobile}: <b>{sent}</b>. Enter it below.</div> : null}

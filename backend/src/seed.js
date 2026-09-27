@@ -93,7 +93,7 @@ async function seed() {
       await tdb.prepare(`INSERT INTO settings (organization_id, setting_key, setting_value, setting_group) VALUES (?,?,?,?)`).run(orgId, k, v, g);
   });
   await txn();
-  console.log('Seed complete. Admin login: admin@abcproperty.com / admin123. Tenant OTP mobile: 9000000001 (OTP printed in API response for demo).');
+  console.log('Seed complete. Admin login: admin@abcproperty.com / admin123. Tenant OTP mobile: 9000000001 (demo code 8520 until SMS is connected).');
 }
 
 if (require.main === module) seed().catch((e) => { console.error(e); process.exit(1); });
