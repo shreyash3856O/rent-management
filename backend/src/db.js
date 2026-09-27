@@ -74,6 +74,25 @@ const ready = (async () => {
   for (const stmt of splitStatements(SCHEMA)) {
     await client.execute(stmt);
   }
+  // One time template upgrade for databases seeded before the receipt and
+  // invoice detail blocks existed. Only touches templates still carrying
+  // the exact original text, never customized ones.
+  const upgrades = [
+    ['Rent Invoice Email',
+      'Dear {{tenant_name}}, your rent invoice of Rs.{{amount}} is due on {{due_date}}.',
+      'Dear {{tenant_name}}, your rent invoice {{invoice_number}} of Rs.{{amount}} is due on {{due_date}}.\n\n{{invoice_detail}}'],
+    ['Payment Receipt Email',
+      'Dear {{tenant_name}}, your payment of Rs.{{amount}} has been received. Receipt: {{receipt_number}}.',
+      'Dear {{tenant_name}}, your payment of Rs.{{amount}} has been received. Receipt: {{receipt_number}}.\n\n{{receipt_detail}}'],
+    ['Overdue Email',
+      'Dear {{tenant_name}}, Rs.{{amount}} is overdue since {{due_date}}.',
+      'Dear {{tenant_name}}, Rs.{{amount}} on invoice {{invoice_number}} is overdue since {{due_date}}.'],
+  ];
+  for (const [name, from, to] of upgrades) {
+    try {
+      await client.execute({ sql: `UPDATE notification_templates SET message_template = ? WHERE template_name = ? AND message_template = ?`, args: [to, name, from] });
+    } catch (e) { console.error('[db] template migration note:', e.message); }
+  }
   console.log(`[db] ready (${REMOTE ? 'embedded replica + Turso' : 'local file'}).`);
 })().catch((e) => { console.error('[db] init failed:', e.message); process.exit(1); });
 

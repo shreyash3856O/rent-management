@@ -33,7 +33,9 @@ function renderTemplate(tpl, vars) {
   for (const [k, v] of Object.entries(vars || {})) {
     out = out.split('{{' + k + '}}').join(String(v == null ? '' : v));
   }
-  return out;
+  // Drop any placeholder the caller did not supply, so raw {{tags}}
+  // never leak into a tenant facing message.
+  return out.replace(/\{\{[^}]+\}\}/g, '');
 }
 
 async function logEmail(notificationId, address, subject, status, response) {

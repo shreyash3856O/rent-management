@@ -82,9 +82,9 @@ async function seed() {
       .run(t1.lastInsertRowid, propId, u1.lastInsertRowid, bedIds[0], plan.lastInsertRowid);
     await tdb.prepare(`INSERT INTO security_deposits (tenant_id, agreement_id, deposit_amount, received_amount, status, received_date) VALUES (?,?,30000,30000,'HELD','2026-09-01')`).run(t1.lastInsertRowid, 1);
     for (const [name, code, ch, subj, msg] of [
-      ['Rent Invoice Email','RENT_GENERATED','EMAIL','Rent invoice {{amount}} due {{due_date}}','Dear {{tenant_name}}, your rent invoice of Rs.{{amount}} is due on {{due_date}}.'],
-      ['Payment Receipt Email','PAYMENT_SUCCESS','EMAIL','Rent Payment Receipt','Dear {{tenant_name}}, your payment of Rs.{{amount}} has been received. Receipt: {{receipt_number}}.'],
-      ['Overdue Email','PAYMENT_OVERDUE','EMAIL','Rent overdue','Dear {{tenant_name}}, Rs.{{amount}} is overdue since {{due_date}}.'],
+      ['Rent Invoice Email','RENT_GENERATED','EMAIL','Rent invoice {{amount}} due {{due_date}}','Dear {{tenant_name}}, your rent invoice {{invoice_number}} of Rs.{{amount}} is due on {{due_date}}.\n\n{{invoice_detail}}'],
+      ['Payment Receipt Email','PAYMENT_SUCCESS','EMAIL','Rent Payment Receipt','Dear {{tenant_name}}, your payment of Rs.{{amount}} has been received. Receipt: {{receipt_number}}.\n\n{{receipt_detail}}'],
+      ['Overdue Email','PAYMENT_OVERDUE','EMAIL','Rent overdue','Dear {{tenant_name}}, Rs.{{amount}} on invoice {{invoice_number}} is overdue since {{due_date}}.'],
       ['Rent Invoice InApp','RENT_GENERATED','IN_APP',null,'Invoice of Rs.{{amount}} due {{due_date}}.'],
       ['Payment InApp','PAYMENT_SUCCESS','IN_APP',null,'Payment of Rs.{{amount}} received. Receipt {{receipt_number}}.'],
       ['Overdue InApp','PAYMENT_OVERDUE','IN_APP',null,'Rs.{{amount}} overdue since {{due_date}}.'],

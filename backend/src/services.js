@@ -13,6 +13,9 @@ function yyyymm(d) {
   const dt = new Date(d);
   return `${dt.getFullYear()}${pad(dt.getMonth() + 1, 2)}`;
 }
+function money(n) {
+  return 'Rs.' + Number(n || 0).toLocaleString('en-IN', { maximumFractionDigits: 2 });
+}
 
 // generate_rent_invoice(agreement_id, invoice_month)
 async function generateRentInvoice(agreementId, invoiceMonth) {
@@ -55,9 +58,27 @@ async function generateRentInvoice(agreementId, invoiceMonth) {
   });
   const invoiceId = await txn();
   const tenant = await db.prepare(`SELECT * FROM tenants WHERE tenant_id = ?`).get(ag.tenant_id);
+  const prop = await db.prepare(`SELECT property_name FROM properties WHERE property_id = ?`).get(ag.property_id);
+  const lines = [
+    `Monthly Rent: ${money(rent)}`,
+    ...(maintenance > 0 ? [`Maintenance Charge: ${money(maintenance)}`] : []),
+    ...(water > 0 ? [`Water Charge: ${money(water)}`] : []),
+    ...(other > 0 ? [`Other Charges: ${money(other)}`] : []),
+  ];
+  const invoiceDetail = [
+    `Rent invoice ${invoiceNumber} (${monthStart.slice(0, 7)})`,
+    ``,
+    `Tenant: ${tenant ? tenant.full_name : ''}`,
+    `Property: ${prop ? prop.property_name : ''}`,
+    `Due date: ${dueDate}`,
+    ``,
+    ...lines,
+    ``,
+    `Total due: ${money(total)}`,
+  ].join('\n');
   events.dispatch({
     eventCode: 'RENT_GENERATED', tenantId: ag.tenant_id,
-    vars: { tenant_name: tenant ? tenant.full_name : '', amount: total, due_date: dueDate, email: tenant ? tenant.email : null, mobile: tenant ? tenant.mobile : null },
+    vars: { tenant_name: tenant ? tenant.full_name : '', amount: total, due_date: dueDate, invoice_number: invoiceNumber, invoice_detail: invoiceDetail, email: tenant ? tenant.email : null, mobile: tenant ? tenant.mobile : null },
   }).catch(() => {});
   return { invoiceId, invoiceNumber };
 }
@@ -122,9 +143,30 @@ async function recordPayment(invoiceId, amount, paymentMode, reference, attachme
   });
   const out = await txn();
   const tenant = await db.prepare(`SELECT * FROM tenants WHERE tenant_id = ?`).get(inv.tenant_id);
+  const invNow = await db.prepare(`SELECT * FROM rent_invoices WHERE invoice_id = ?`).get(invoiceId);
+  const ctx = await db.prepare(`SELECT p.property_name, o.organization_name
+    FROM rental_agreements a LEFT JOIN properties p ON p.property_id = a.property_id
+    LEFT JOIN organizations o ON o.organization_id = p.organization_id
+    WHERE a.agreement_id = ?`).get(inv.agreement_id);
+  const today = new Date().toISOString().slice(0, 10);
+  const receiptDetail = [
+    `Rent receipt ${out.receiptNumber} dated ${today}`,
+    ``,
+    `Organization: ${ctx ? ctx.organization_name || '' : ''}`,
+    `Property: ${ctx ? ctx.property_name || '' : ''}`,
+    `Tenant: ${tenant ? tenant.full_name : ''}`,
+    `Invoice: ${invNow.invoice_number} (${String(invNow.invoice_month).slice(0, 10)})`,
+    `Payment mode: ${paymentMode}`,
+    `Payment reference: ${reference || '-'}`,
+    `Payment date: ${today}`,
+    ``,
+    `Amount received: ${money(amount)}`,
+    ``,
+    `Invoice ${invNow.invoice_number} now shows ${money(invNow.paid_amount)} paid, ${money(invNow.outstanding_amount)} outstanding.`,
+  ].join('\n');
   events.dispatch({
     eventCode: 'PAYMENT_SUCCESS', tenantId: inv.tenant_id,
-    vars: { tenant_name: tenant ? tenant.full_name : '', amount, receipt_number: out.receiptNumber, email: tenant ? tenant.email : null, mobile: tenant ? tenant.mobile : null },
+    vars: { tenant_name: tenant ? tenant.full_name : '', amount, receipt_number: out.receiptNumber, receipt_detail: receiptDetail, email: tenant ? tenant.email : null, mobile: tenant ? tenant.mobile : null },
   }).catch(() => {});
   return out;
 }
@@ -144,7 +186,7 @@ async function markOverdueInvoices() {
   for (const r of rows) {
     events.dispatch({
       eventCode: 'PAYMENT_OVERDUE', tenantId: r.tenant_id,
-      vars: { tenant_name: r.full_name, amount: r.outstanding_amount, due_date: r.due_date, email: r.email, mobile: r.mobile },
+      vars: { tenant_name: r.full_name, amount: r.outstanding_amount, due_date: r.due_date, invoice_number: r.invoice_number, email: r.email, mobile: r.mobile },
     }).catch(() => {});
   }
   return { marked: fresh.length };

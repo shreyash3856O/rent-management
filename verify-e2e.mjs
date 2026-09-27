@@ -20,6 +20,11 @@ ok(!!pay.paymentId && !!pay.receiptNumber, `record payment + receipt ${pay.recei
 const detail = await call('GET', `/api/invoices/${inv.invoice_id}`, null, T);
 ok(detail.paid_amount === 5000 && detail.status === 'PARTIALLY_PAID', `invoice auto updated paid=${detail.paid_amount} status=${detail.status}`);
 ok(detail.receipts.length === 1, 'receipt auto created');
+const notifs = await call('GET', '/api/notifications', null, T);
+const payMail = notifs.find((n) => n.event_code === 'PAYMENT_SUCCESS' && n.channel === 'EMAIL');
+ok(payMail && payMail.message.includes('Amount received') && payMail.message.includes(pay.receiptNumber), 'payment mail carries the receipt');
+const invMail = notifs.find((n) => n.event_code === 'RENT_GENERATED' && n.channel === 'EMAIL');
+ok(invMail && invMail.message.includes('Total due'), 'invoice mail carries line items');
 // invalid amount rejected at data layer
 try { await call('POST', '/api/payments', { invoice_id: inv.invoice_id, amount: 0, payment_mode: 'UPI', confirm: true }, T); ok(false, 'zero payment rejected'); }
 catch { ok(true, 'zero payment rejected with real error'); }
