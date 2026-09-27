@@ -16,6 +16,10 @@ function Field({ label, error, children }) {
   return (<div><label>{label}</label>{children}{error ? <div className="field-err">{error}</div> : null}</div>);
 }
 function need(v) { return v == null || String(v).trim() === '' ? 'Required.' : null; }
+function mobileErr(v) {
+  if (need(v)) return 'Required.';
+  return /^\d{10}$/.test(String(v)) ? null : 'Enter exactly 10 digits.';
+}
 function BusyOverlay() {
   const [s, setS] = useState(busy.snapshot());
   useEffect(() => busy.subscribe(setS), []);
@@ -53,7 +57,7 @@ function TenantLogin() {
   return (<div className="login-wrap">
     <h1>Rent Ledger. Tenant sign in.</h1>
     <p className="sub">Step 1, request OTP. Step 2, enter OTP. Demo OTP is shown on screen.</p>
-    <Field label="Mobile" error={need(mobile)}><input value={mobile} onChange={(e) => setMobile(e.target.value)} /></Field>
+    <Field label="Mobile" error={mobileErr(mobile)}><input inputMode="numeric" maxLength={10} value={mobile} onChange={(e) => setMobile(e.target.value.replace(/\D/g, '').slice(0, 10))} /></Field>
     <p><button onClick={async () => { try { const r = await withBusy('Requesting OTP.', async () => api.post('/api/auth/tenant/request-otp', { mobile })); setSent(r.otp); setErr(null); } catch (e) { setErr(e.message); } }}>Request OTP</button></p>
     {sent ? <div className="notice">Demo OTP for {mobile}: <b>{sent}</b>. Enter it below.</div> : null}
     <Field label="OTP"><input value={otp} onChange={(e) => setOtp(e.target.value)} /></Field>
@@ -188,7 +192,7 @@ function Tenants() {
   const startEdit = (t) => { setEditing({ ...t }); setNote(null); setErr(null); };
   const saveEdit = async () => {
     try {
-      if (need(editing.full_name) || need(editing.mobile)) { setErr('Name and mobile are required.'); return; }
+      if (need(editing.full_name) || mobileErr(editing.mobile)) { setErr('Name and a 10 digit mobile are required.'); return; }
       await withBusy('Saving tenant.', async () => {
         await api.put(`/api/tenants/${editing.tenant_id}`, {
           full_name: editing.full_name, mobile: editing.mobile, email: editing.email || null,
@@ -217,13 +221,13 @@ function Tenants() {
   return (<div><h1>Tenants and KYC.</h1><p className="sub">Register a tenant, then set KYC status. Verification detail stays on this page.</p>
     <div className="form-grid">
       <Field label="Full name" error={need(f.full_name)}><input value={f.full_name} onChange={(e) => set('full_name', e.target.value)} /></Field>
-      <Field label="Mobile" error={need(f.mobile)}><input value={f.mobile} onChange={(e) => set('mobile', e.target.value)} /></Field>
+      <Field label="Mobile" error={mobileErr(f.mobile)}><input inputMode="numeric" maxLength={10} value={f.mobile} onChange={(e) => set('mobile', e.target.value.replace(/\D/g, '').slice(0, 10))} /></Field>
       <Field label="Email"><input value={f.email} onChange={(e) => set('email', e.target.value)} /></Field></div>
     {err ? <div className="field-err">{err}</div> : null}
     {note ? <div className="notice">{note}</div> : null}
     <p><button className="primary" onClick={async () => {
       try {
-        if (need(f.full_name) || need(f.mobile)) { setErr('Name and mobile are required.'); return; }
+        if (need(f.full_name) || mobileErr(f.mobile)) { setErr('Name and a 10 digit mobile are required.'); return; }
         await withBusy('Registering tenant.', async () => { await api.post('/api/tenants', f); });
         setF({ full_name: '', mobile: '', email: '' }); setErr(null); setNote('Tenant registered.'); load();
       } catch (e) { setErr(e.message); }
@@ -247,7 +251,7 @@ function Tenants() {
     {editing ? <div><h2>Editing {editing.full_name}.</h2>
       <div className="form-grid">
         <Field label="Full name" error={need(editing.full_name)}><input value={editing.full_name || ''} onChange={(e) => setE('full_name', e.target.value)} /></Field>
-        <Field label="Mobile" error={need(editing.mobile)}><input value={editing.mobile || ''} onChange={(e) => setE('mobile', e.target.value)} /></Field>
+        <Field label="Mobile" error={mobileErr(editing.mobile)}><input inputMode="numeric" maxLength={10} value={editing.mobile || ''} onChange={(e) => setE('mobile', e.target.value.replace(/\D/g, '').slice(0, 10))} /></Field>
         <Field label="Email"><input value={editing.email || ''} onChange={(e) => setE('email', e.target.value)} /></Field>
         <Field label="Gender"><select value={editing.gender || ''} onChange={(e) => setE('gender', e.target.value)}><option value="">Select</option><option>MALE</option><option>FEMALE</option><option>OTHER</option></select></Field>
         <Field label="Occupation"><input value={editing.occupation || ''} onChange={(e) => setE('occupation', e.target.value)} /></Field>

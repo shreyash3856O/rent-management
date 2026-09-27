@@ -103,6 +103,7 @@ app.post('/api/auth/login', async (req, res) => {
 // Tenant OTP: request + verify. Demo returns OTP in response (no SMS vendor in v1).
 app.post('/api/auth/tenant/request-otp', async (req, res) => {
   const { mobile } = req.body || {};
+  if (!/^\d{10}$/.test(String(mobile || ''))) return res.status(400).json({ error: 'Enter a 10 digit mobile number.' });
   const t = await db.prepare(`SELECT * FROM tenants WHERE mobile = ?`).get(mobile);
   if (!t) return res.status(404).json({ error: 'Tenant mobile not registered' });
   const code = String(Math.floor(100000 + Math.random() * 900000));
@@ -149,6 +150,9 @@ function crud(table, pk, moduleName, opts = {}) {
     try {
       const data = { ...(req.body || {}) };
       delete data[pk];
+      if ((table === 'tenants' || table === 'users') && data.mobile !== undefined && data.mobile !== null && data.mobile !== '') {
+        if (!/^\d{10}$/.test(String(data.mobile))) return res.status(400).json({ error: 'Mobile must be exactly 10 digits.' });
+      }
       const keys = Object.keys(data);
       if (!keys.length) return res.status(400).json({ error: 'Empty body' });
       const info = await db.prepare(`INSERT INTO ${table} (${keys.join(',')}) VALUES (${keys.map(() => '?').join(',')})`).run(...keys.map((k) => data[k]));
@@ -163,6 +167,9 @@ function crud(table, pk, moduleName, opts = {}) {
       if (!old) return res.status(404).json({ error: 'Not found' });
       const data = { ...(req.body || {}) };
       delete data[pk];
+      if ((table === 'tenants' || table === 'users') && data.mobile !== undefined && data.mobile !== null && data.mobile !== '') {
+        if (!/^\d{10}$/.test(String(data.mobile))) return res.status(400).json({ error: 'Mobile must be exactly 10 digits.' });
+      }
       const keys = Object.keys(data);
       if (opts.beforeUpdate) await opts.beforeUpdate(old, data, req);
       if (keys.length) await db.prepare(`UPDATE ${table} SET ${keys.map((k) => `${k} = ?`).join(',')} WHERE ${pk} = ?`).run(...keys.map((k) => data[k]), req.params.id);
@@ -210,41 +217,53 @@ app.use('/api/tenants', crud('tenants', 'tenant_id', 'TENANT', {
     if (Number(due.d) > 0.005) return res.status(409).json({ error: 'Cannot delete: tenant still owes ' + due.d + '. Settle dues first.' });
     try {
       const wipe = db.transaction(async (tdb) => {
+        const step = async (name, sql, ...args) => {
+          try { await tdb.prepare(sql).run(...args); }
+          catch (e) { throw Object.assign(new Error(`delete failed at step [${name}]: ${e.message}`), { step: name }); }
+        };
         const payIds = (await tdb.prepare(`SELECT payment_id FROM payments WHERE tenant_id = ?`).all(tid)).map((p) => p.payment_id);
         const invIds = (await tdb.prepare(`SELECT invoice_id FROM rent_invoices WHERE tenant_id = ?`).all(tid)).map((i) => i.invoice_id);
         const compIds = (await tdb.prepare(`SELECT complaint_id FROM complaints WHERE tenant_id = ?`).all(tid)).map((c) => c.complaint_id);
         if (payIds.length) {
           const ph = payIds.map(() => '?').join(',');
-          await tdb.prepare(`DELETE FROM payment_transactions WHERE payment_id IN (${ph})`).run(...payIds);
-          await tdb.prepare(`DELETE FROM receipts WHERE payment_id IN (${ph})`).run(...payIds);
-          await tdb.prepare(`DELETE FROM documents WHERE entity_type = 'payment' AND entity_id IN (${ph})`).run(...payIds);
-          await tdb.prepare(`DELETE FROM payments WHERE payment_id IN (${ph})`).run(...payIds);
+          await step('payment_transactions', `DELETE FROM payment_transactions WHERE payment_id IN (${ph})`, ...payIds);
+          await step('receipts', `DELETE FROM receipts WHERE payment_id IN (${ph})`, ...payIds);
+          await step('payment_proofs', `DELETE FROM documents WHERE entity_type = 'payment' AND entity_id IN (${ph})`, ...payIds);
+          await step('payments', `DELETE FROM payments WHERE payment_id IN (${ph})`, ...payIds);
         }
         if (invIds.length) {
           const ih = invIds.map(() => '?').join(',');
-          await tdb.prepare(`DELETE FROM invoice_items WHERE invoice_id IN (${ih})`).run(...invIds);
-          await tdb.prepare(`DELETE FROM rent_invoices WHERE invoice_id IN (${ih})`).run(...invIds);
+          await step('invoice_items', `DELETE FROM invoice_items WHERE invoice_id IN (${ih})`, ...invIds);
+          await step('rent_invoices', `DELETE FROM rent_invoices WHERE invoice_id IN (${ih})`, ...invIds);
         }
         if (compIds.length) {
           const ch = compIds.map(() => '?').join(',');
-          await tdb.prepare(`DELETE FROM maintenance_tasks WHERE complaint_id IN (${ch})`).run(...compIds);
-          await tdb.prepare(`DELETE FROM documents WHERE entity_type = 'complaint' AND entity_id IN (${ch})`).run(...compIds);
-          await tdb.prepare(`DELETE FROM complaints WHERE complaint_id IN (${ch})`).run(...compIds);
+          await step('maintenance_tasks', `DELETE FROM maintenance_tasks WHERE complaint_id IN (${ch})`, ...compIds);
+          await step('complaint_docs', `DELETE FROM documents WHERE entity_type = 'complaint' AND entity_id IN (${ch})`, ...compIds);
+          await step('complaints', `DELETE FROM complaints WHERE complaint_id IN (${ch})`, ...compIds);
         }
-        await tdb.prepare(`DELETE FROM security_deposits WHERE tenant_id = ?`).run(tid);
-        await tdb.prepare(`DELETE FROM tenant_documents WHERE tenant_id = ?`).run(tid);
-        await tdb.prepare(`DELETE FROM tenant_kyc WHERE tenant_id = ?`).run(tid);
-        await tdb.prepare(`DELETE FROM notifications WHERE tenant_id = ?`).run(tid);
-        await tdb.prepare(`DELETE FROM notices WHERE tenant_id = ?`).run(tid);
-        await tdb.prepare(`DELETE FROM tenant_otps WHERE mobile = ?`).run(old.mobile);
-        await tdb.prepare(`DELETE FROM rental_agreements WHERE tenant_id = ?`).run(tid);
-        await tdb.prepare(`DELETE FROM tenants WHERE tenant_id = ?`).run(tid);
-        if (old.user_id) await tdb.prepare(`DELETE FROM users WHERE user_id = ?`).run(old.user_id);
+        await step('security_deposits', `DELETE FROM security_deposits WHERE tenant_id = ?`, tid);
+        await step('tenant_documents', `DELETE FROM tenant_documents WHERE tenant_id = ?`, tid);
+        await step('tenant_kyc', `DELETE FROM tenant_kyc WHERE tenant_id = ?`, tid);
+        // channel logs reference notifications, so they go first
+        await step('sms_logs', `DELETE FROM sms_logs WHERE notification_id IN (SELECT notification_id FROM notifications WHERE tenant_id = ?)`, tid);
+        await step('whatsapp_logs', `DELETE FROM whatsapp_logs WHERE notification_id IN (SELECT notification_id FROM notifications WHERE tenant_id = ?)`, tid);
+        await step('email_logs', `DELETE FROM email_logs WHERE notification_id IN (SELECT notification_id FROM notifications WHERE tenant_id = ?)`, tid);
+        await step('notifications', `DELETE FROM notifications WHERE tenant_id = ?`, tid);
+        await step('notices', `DELETE FROM notices WHERE tenant_id = ?`, tid);
+        await step('tenant_otps', `DELETE FROM tenant_otps WHERE mobile = ?`, old.mobile);
+        await step('rental_agreements', `DELETE FROM rental_agreements WHERE tenant_id = ?`, tid);
+        await step('tenants', `DELETE FROM tenants WHERE tenant_id = ?`, tid);
+        if (old.user_id) await step('users', `DELETE FROM users WHERE user_id = ?`, old.user_id);
       });
       await wipe();
       audit(req.auth.userId, 'TENANT', 'DELETE', 'tenants', tid, old, null, req);
       res.json({ deleted: true });
-    } catch (e) { res.status(400).json({ error: e.message }); }
+    } catch (e) {
+      if (/foreign key/i.test(e.message) && !e.step)
+        return res.status(409).json({ error: 'Cannot delete: other records still link to this one. Remove or reassign them first.' });
+      res.status(400).json({ error: e.message });
+    }
   },
 }));
 app.use('/api/tenant-documents', crud('tenant_documents', 'tenant_document_id', 'TENANT'));

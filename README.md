@@ -110,7 +110,8 @@ Cron runs monthly generation on the 1st at 01:00 and overdue marking daily at 02
 Working product, verified by `verify-e2e.mjs` plus manual passes: auth, RBAC,
 hierarchy, tenants and KYC with real document uploads, tenant edit and guarded
 delete (refuses active agreements and unpaid dues, otherwise wipes the trail in
-one transaction), agreements with automatic occupancy flips, monthly invoicing,
+one transaction, including notification logs), 10 digit mobile validation on
+tenant and user records, agreements with automatic occupancy flips, monthly invoicing,
 payment recording with proof images, overpayment protection, automatic
 invoice updates and printable receipts, tenant dashboard and ledger, complaint
 filing with photo attachments, in-app notifications, real email over SMTP when
