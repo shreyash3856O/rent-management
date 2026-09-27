@@ -88,8 +88,8 @@ per channel log tables, so delivery is auditable either way.
 |---|---|
 | In-app | Real. Written to `notifications`, visible in the tenant Notices tab. |
 | Email | Real when `BREVO_API_KEY` plus `BREVO_SENDER` is set (HTTP API, works everywhere including free hosts), or when `SMTP_HOST` (plus user, pass, from) is set on a host with SMTP egress. Sent on every billing event. Without either it logs to console and `email_logs` as `STUB_CONSOLE`, so demos work with zero setup. `email_logs` records `SENT`, `FAILED`, or `STUB_CONSOLE` with the provider message id or error. The Audit log page shows a delivery table, so missing mail is diagnosable from the UI. |
-| SMS | Real when `BREVO_SMS_SENDER` is set (same Brevo account and API key as mail, transactional SMS rates apply), or when `SMS_WEBHOOK_URL` points at a gateway accepting `POST {to, message}`. Sends OTP codes plus invoice, payment, and overdue texts. Without either, rows stay `PENDING_STUB` in `sms_logs`. This matches the brief: no SMS vendor in v1, clean hook ready. |
-| WhatsApp | Tables plus provider stub only, per the brief (explicitly out of v1 scope). Same webhook pattern fits when needed. |
+| SMS | Paid path: `BREVO_SMS_SENDER` on the same Brevo account and key (transactional rates apply), or `SMS_WEBHOOK_URL` for any gateway taking `POST {to, message}`. Without either, rows stay `PENDING_STUB`. Phone networks charge per text, so there is no free SMS tier anywhere. |
+| WhatsApp | Free path: Meta WhatsApp Cloud API via `WHATSAPP_TOKEN`, `WHATSAPP_PHONE_ID`, `WHATSAPP_TEMPLATE` (one approved UTILITY template reading `Rent Ledger update: {{1}}`). Sends OTP codes plus invoice, payment, and overdue texts inside Meta's free monthly conversations. No DLT registration needed. Without it, rows stay `PENDING_STUB` in `whatsapp_logs`. |
 
 ## API notes
 

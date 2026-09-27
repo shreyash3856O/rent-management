@@ -88,7 +88,10 @@ async function seed() {
       ['Rent Invoice InApp','RENT_GENERATED','IN_APP',null,'Invoice of Rs.{{amount}} due {{due_date}}.'],
       ['Payment InApp','PAYMENT_SUCCESS','IN_APP',null,'Payment of Rs.{{amount}} received. Receipt {{receipt_number}}.'],
       ['Overdue InApp','PAYMENT_OVERDUE','IN_APP',null,'Rs.{{amount}} overdue since {{due_date}}.'],
-    ]) await tdb.prepare(`INSERT INTO notification_templates (template_name, event_code, channel, subject, message_template) VALUES (?,?,?,?,?)`).run(name, code, ch, subj, msg);
+      ['Rent Invoice WhatsApp','RENT_GENERATED','WHATSAPP',null,'Dear {{tenant_name}}, your rent invoice {{invoice_number}} of Rs.{{amount}} is due on {{due_date}}.\n\n{{invoice_detail}}'],
+      ['Payment WhatsApp','PAYMENT_SUCCESS','WHATSAPP',null,'Dear {{tenant_name}}, your payment of Rs.{{amount}} has been received. Receipt: {{receipt_number}}.\n\n{{receipt_detail}}'],
+      ['Overdue WhatsApp','PAYMENT_OVERDUE','WHATSAPP',null,'Dear {{tenant_name}}, Rs.{{amount}} on invoice {{invoice_number}} is overdue since {{due_date}}.'],
+    ]) await tdb.prepare(`INSERT OR IGNORE INTO notification_templates (template_name, event_code, channel, subject, message_template) VALUES (?,?,?,?,?)`).run(name, code, ch, subj, msg);
     for (const [k, v, g] of [['CURRENCY','INR','GENERAL'],['CURRENCY_SYMBOL','Rs.','GENERAL'],['DEFAULT_DUE_DAY','5','RENT']])
       await tdb.prepare(`INSERT INTO settings (organization_id, setting_key, setting_value, setting_group) VALUES (?,?,?,?)`).run(orgId, k, v, g);
   });

@@ -93,6 +93,20 @@ const ready = (async () => {
       await client.execute({ sql: `UPDATE notification_templates SET message_template = ? WHERE template_name = ? AND message_template = ?`, args: [to, name, from] });
     } catch (e) { console.error('[db] template migration note:', e.message); }
   }
+  // WhatsApp templates for existing databases (fresh installs get them
+  // from seed). Missing rows only; never touches customized ones.
+  const waNew = [
+    ['Rent Invoice WhatsApp','RENT_GENERATED','WHATSAPP',null,'Dear {{tenant_name}}, your rent invoice {{invoice_number}} of Rs.{{amount}} is due on {{due_date}}.\n\n{{invoice_detail}}'],
+    ['Payment WhatsApp','PAYMENT_SUCCESS','WHATSAPP',null,'Dear {{tenant_name}}, your payment of Rs.{{amount}} has been received. Receipt: {{receipt_number}}.\n\n{{receipt_detail}}'],
+    ['Overdue WhatsApp','PAYMENT_OVERDUE','WHATSAPP',null,'Dear {{tenant_name}}, Rs.{{amount}} on invoice {{invoice_number}} is overdue since {{due_date}}.'],
+  ];
+  for (const [name, code, ch, subj, msg] of waNew) {
+    try {
+      await client.execute({ sql: `INSERT INTO notification_templates (template_name, event_code, channel, subject, message_template)
+        SELECT ?,?,?,?,? WHERE NOT EXISTS (SELECT 1 FROM notification_templates WHERE event_code = ? AND channel = ?)`,
+        args: [name, code, ch, subj, msg, code, ch] });
+    } catch (e) { console.error('[db] template migration note:', e.message); }
+  }
   console.log(`[db] ready (${REMOTE ? 'embedded replica + Turso' : 'local file'}).`);
 })().catch((e) => { console.error('[db] init failed:', e.message); process.exit(1); });
 

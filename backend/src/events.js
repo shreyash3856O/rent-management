@@ -12,9 +12,7 @@ const smsProviders = {
     const key = String(process.env.BREVO_API_KEY || '').trim();
     const sender = String(process.env.BREVO_SMS_SENDER || '').trim();
     if (key && sender) {
-      let digits = String(mobile || '').replace(/\D/g, '');
-      if (/^\d{10}$/.test(digits)) digits = '91' + digits; // Indian mobiles
-      const recipient = '+' + digits;
+      const recipient = '+' + normalizePhone(mobile);
       const r = await fetch('https://api.brevo.com/v3/transactionalSMS/sms', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'api-key': key },
@@ -40,8 +38,43 @@ const smsProviders = {
   },
 };
 const whatsappProviders = {
-  sendWhatsapp: async (mobile, message) => ({ status: 'QUEUED_STUB', mobile }),
+  // Meta WhatsApp Cloud API. Free monthly conversations make this the $0
+  // path for OTPs and reminders. Needs WHATSAPP_TOKEN (permanent token),
+  // WHATSAPP_PHONE_ID, and a UTILITY template whose body is exactly one
+  // variable, e.g. text "Rent Ledger update: {{1}}". Our full message goes
+  // into that variable. No DLT registration needed (Meta's own platform).
+  sendWhatsapp: async (mobile, message) => {
+    const token = String(process.env.WHATSAPP_TOKEN || '').trim();
+    const phoneId = String(process.env.WHATSAPP_PHONE_ID || '').trim();
+    const template = String(process.env.WHATSAPP_TEMPLATE || 'rent_update').trim();
+    if (!token || !phoneId) throw new Error('WHATSAPP_TOKEN / WHATSAPP_PHONE_ID are not configured');
+    const to = normalizePhone(mobile);
+    const r = await fetch(`https://graph.facebook.com/v22.0/${phoneId}/messages`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify({
+        messaging_product: 'whatsapp',
+        to,
+        type: 'template',
+        template: {
+          name: template,
+          language: { code: 'en' },
+          components: [{ type: 'body', parameters: [{ type: 'text', text: String(message).slice(0, 900) }] }],
+        },
+      }),
+    });
+    if (!r.ok) throw new Error(`WhatsApp HTTP ${r.status}: ${(await r.text()).slice(0, 200)}`);
+    const j = await r.json().catch(() => ({}));
+    const id = j.messages && j.messages[0] ? j.messages[0].id : 'accepted';
+    return { status: 'SENT', mobile, detail: `whatsapp=${id}` };
+  },
 };
+
+function normalizePhone(mobile) {
+  let digits = String(mobile || '').replace(/\D/g, '');
+  if (/^\d{10}$/.test(digits)) digits = '91' + digits; // Indian mobiles
+  return digits;
+}
 
 function renderTemplate(tpl, vars) {
   let out = tpl || '';
@@ -189,8 +222,20 @@ async function dispatch({ eventCode, tenantId = null, userId = null, vars = {} }
         status = stub ? 'PENDING' : 'FAILED';
       }
     }
-    if (channel === 'WHATSAPP') await db.prepare(`INSERT INTO whatsapp_logs (notification_id, mobile, status, response, sent_at)
-      VALUES (?,?,?,?,datetime('now'))`).run(nid, recipient, 'PENDING_STUB', 'WhatsApp disabled in v1');
+    if (channel === 'WHATSAPP') {
+      try {
+        const out = await whatsappProviders.sendWhatsapp(recipient, message);
+        await db.prepare(`UPDATE notifications SET status = 'SENT', sent_at = datetime('now') WHERE notification_id = ?`).run(nid);
+        await db.prepare(`INSERT INTO whatsapp_logs (notification_id, mobile, status, response, sent_at)
+          VALUES (?,?,?, ?,datetime('now'))`).run(nid, recipient, 'SENT', (out && out.detail) || 'accepted');
+        status = 'SENT';
+      } catch (e) {
+        const stub = /not configured/.test(e.message);
+        await db.prepare(`INSERT INTO whatsapp_logs (notification_id, mobile, status, response, sent_at)
+          VALUES (?,?,?, ?,datetime('now'))`).run(nid, recipient, stub ? 'PENDING_STUB' : 'FAILED', stub ? 'WhatsApp not connected; set WHATSAPP_TOKEN' : withCause(e));
+        status = stub ? 'PENDING' : 'FAILED';
+      }
+    }
     results.push({ notificationId: nid, channel, status });
   }
   return results;
