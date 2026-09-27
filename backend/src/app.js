@@ -107,10 +107,13 @@ app.post('/api/auth/tenant/request-otp', async (req, res) => {
   const t = await db.prepare(`SELECT * FROM tenants WHERE mobile = ?`).get(mobile);
   if (!t) return res.status(404).json({ error: 'Tenant mobile not registered' });
   const code = String(Math.floor(100000 + Math.random() * 900000));
-  // No SMS vendor connected: fixed demo code so tenants can always sign in.
-  // WARNING: anyone who knows a tenant's mobile can log in while this is on.
-  // Setting SMS_WEBHOOK_URL switches to random one-time codes automatically.
-  if (!process.env.SMS_WEBHOOK_URL) {
+  // SMS counts as connected when Brevo texting or a generic webhook is set.
+  // Otherwise the fixed demo code stays, so tenants can always sign in.
+  // WARNING: anyone who knows a tenant's mobile can log in while demo mode
+  // is on. Connecting SMS switches to random one-time codes automatically.
+  const smsReady = Boolean(process.env.SMS_WEBHOOK_URL)
+    || (String(process.env.BREVO_API_KEY || '').trim() && String(process.env.BREVO_SMS_SENDER || '').trim());
+  if (!smsReady) {
     await db.prepare(`DELETE FROM tenant_otps WHERE mobile = ? AND consumed = 0`).run(mobile);
     await db.prepare(`INSERT INTO tenant_otps (mobile, otp_code, expires_at) VALUES (?,?,datetime('now','+10 minutes'))`).run(mobile, '8520');
     return res.json({ message: 'SMS not connected. Demo code 8520 is active.', otp: '8520' });

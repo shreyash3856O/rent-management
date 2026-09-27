@@ -5,13 +5,28 @@
 const db = require('./db');
 
 const smsProviders = {
-  // Generic HTTP SMS seam. Set SMS_WEBHOOK_URL (and optional SMS_WEBHOOK_KEY)
-  // to a gateway that accepts POST {to, message} and returns 2xx.
-  // Twilio, Gupshup, or any bulk SMS vendor fits behind this function.
-  // With no webhook configured it throws, and callers record PENDING_STUB.
+  // Brevo transactional SMS first (same account and key as email, no new
+  // vendor). Falls back to a generic HTTP webhook. Throws when neither is
+  // configured, and callers record PENDING_STUB.
   sendSms: async (mobile, message) => {
+    const key = String(process.env.BREVO_API_KEY || '').trim();
+    const sender = String(process.env.BREVO_SMS_SENDER || '').trim();
+    if (key && sender) {
+      let digits = String(mobile || '').replace(/\D/g, '');
+      if (/^\d{10}$/.test(digits)) digits = '91' + digits; // Indian mobiles
+      const recipient = '+' + digits;
+      const r = await fetch('https://api.brevo.com/v3/transactionalSMS/sms', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'api-key': key },
+        body: JSON.stringify({ sender, recipient, content: message, type: 'transactional' }),
+      });
+      if (!r.ok) throw new Error(`Brevo SMS HTTP ${r.status}: ${(await r.text()).slice(0, 200)}`);
+      const j = await r.json().catch(() => ({}));
+      return { status: 'SENT', mobile, detail: `brevo-sms=${j.messageId || 'accepted'}` };
+    }
+    // Generic HTTP SMS seam: any gateway accepting POST {to, message} -> 2xx.
     const url = process.env.SMS_WEBHOOK_URL;
-    if (!url) throw new Error('SMS_WEBHOOK_URL is not configured');
+    if (!url) throw new Error('SMS is not configured (set BREVO_SMS_SENDER or SMS_WEBHOOK_URL)');
     const r = await fetch(url, {
       method: 'POST',
       headers: {
@@ -162,10 +177,10 @@ async function dispatch({ eventCode, tenantId = null, userId = null, vars = {} }
     }
     if (channel === 'SMS') {
       try {
-        await smsProviders.sendSms(recipient, message);
+        const out = await smsProviders.sendSms(recipient, message);
         await db.prepare(`UPDATE notifications SET status = 'SENT', sent_at = datetime('now') WHERE notification_id = ?`).run(nid);
         await db.prepare(`INSERT INTO sms_logs (notification_id, mobile, status, response, sent_at)
-          VALUES (?,?,?, ?,datetime('now'))`).run(nid, recipient, 'SENT', 'gateway accepted');
+          VALUES (?,?,?, ?,datetime('now'))`).run(nid, recipient, 'SENT', (out && out.detail) || 'gateway accepted');
         status = 'SENT';
       } catch (e) {
         const stub = /not configured/.test(e.message);
