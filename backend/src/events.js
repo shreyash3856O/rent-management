@@ -179,15 +179,21 @@ async function dispatch({ eventCode, tenantId = null, userId = null, vars = {} }
   return results;
 }
 
-// Raw reachability probe: proves TCP plus TLS plus HTTP to Brevo work,
-// independent of any key. Returns { ok, status } for the diagnostics UI.
+// Key validity probe: GET /v3/account WITH the configured key.
+// 200 means Brevo accepted the key, 401 means it rejected it.
 async function probeBrevo() {
+  const key = String(process.env.BREVO_API_KEY || '').trim();
   try {
-    const r = await fetch('https://api.brevo.com/v3/account', { method: 'GET' });
+    const r = await fetch('https://api.brevo.com/v3/account', {
+      method: 'GET',
+      headers: key ? { 'api-key': key } : {},
+    });
     await r.text().catch(() => '');
-    return { ok: true, status: r.status, note: r.status === 401 ? 'reachable, needs a valid key' : 'reachable' };
+    if (r.status === 200) return { ok: true, valid: true, status: 200, note: 'key accepted by Brevo' };
+    if (r.status === 401) return { ok: true, valid: false, status: 401, note: key ? 'key rejected: regenerate it in Brevo' : 'no key configured' };
+    return { ok: true, valid: false, status: r.status, note: 'unexpected response' };
   } catch (e) {
-    return { ok: false, status: null, note: withCause(e) };
+    return { ok: false, valid: false, status: null, note: withCause(e) };
   }
 }
 

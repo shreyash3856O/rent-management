@@ -52,6 +52,8 @@ ok(audit.length >= 3, `audit log has ${audit.length} entries`);
 // new: health, uploads guard, receipt detail, tenant statement, complaint files
 const health = await call('GET', '/api/health');
 ok(health.ok === true, 'health endpoint');
+const diag = await call('GET', '/api/diag/email', null, T);
+ok(diag && diag.probe && typeof diag.probe.note === 'string', 'mail diagnostics endpoint');
 const rc = await call('GET', '/api/receipts', null, T);
 const rdet = await call('GET', `/api/receipts/${rc[0].receipt_id}`, null, T);
 ok(rdet.organization && rdet.invoice && rdet.payment, 'receipt detail with org+invoice+payment');
