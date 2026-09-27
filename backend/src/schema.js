@@ -410,6 +410,13 @@ CREATE TABLE IF NOT EXISTS tenant_otps (
   expires_at TEXT NOT NULL, consumed INTEGER NOT NULL DEFAULT 0,
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
+CREATE TABLE IF NOT EXISTS file_blobs (
+  file_id INTEGER PRIMARY KEY AUTOINCREMENT,
+  file_name TEXT NOT NULL, mime_type TEXT NOT NULL, file_size INTEGER NOT NULL,
+  data BLOB NOT NULL,
+  uploaded_by TEXT,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
 `;
 
 module.exports = { SCHEMA };

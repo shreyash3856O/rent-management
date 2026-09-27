@@ -4,14 +4,22 @@ Admin web app plus tenant web app plus REST API plus database. Scope is exactly 
 
 ## Layout
 
-- `backend/` Node.js plus Express plus SQLite (`node:sqlite`, zero native build). JWT auth for staff, mobile plus OTP for tenants, RBAC from the `role_permissions` table at the API layer, central event bus (`src/events.js`), scheduler (`node-cron`) for monthly rent and overdue marking.
+- `backend/` Node.js plus Express plus Turso (`@libsql/client`). Locally it is
+  a plain SQLite file with zero setup; set `TURSO_URL` plus `TURSO_TOKEN` and
+  it becomes an embedded replica that syncs to Turso in the background, so
+  data survives disk wipes on free hosts. JWT auth for staff, mobile plus OTP
+  for tenants, RBAC from the `role_permissions` table at the API layer,
+  central event bus (`src/events.js`), scheduler (`node-cron`) for monthly
+  rent and overdue marking. Uploads are stored as database blobs (not disk
+  files) for the same survival reason.
 - `frontend/` One Vite plus React build serving both sides: `/admin/*` (left nav, data dense tables) and `/tenant/*` (single column, thumb reachable). Grayscale only per Section 7.
 - `property_rent_management_mysql51_final_import_ready.sql` Legacy reference schema. The running schema is `backend/src/schema.js`, a line for line port to modern SQLite with real `CHECK` errors (payments must be over 0, ledger rows cannot carry both debit and credit).
 - `verify-e2e.mjs` End to end check (15 assertions, all passing).
 
 ## Run locally
 
-Requirements: Node 22 or newer (uses built in `node:sqlite`), npm.
+Requirements: Node 22 or newer, npm. The database is a local SQLite file by
+default; add `TURSO_URL` plus `TURSO_TOKEN` to sync with Turso.
 
 ```
 cp .env.example .env   # then set JWT_SECRET at minimum
@@ -43,7 +51,9 @@ docker compose up --build -d
 ```
 
 This builds one image (React build served by Express on :4000), persists the
-database and uploads in `./data/`, and health checks `/api/health`.
+local replica in `./data/`, and health checks `/api/health`. For hosted use,
+set `TURSO_URL` plus `TURSO_TOKEN` so the database syncs to Turso and survives
+disk wipes; uploads ride along because they live inside the database.
 `NODE_ENV=production` enforces two guards: the server refuses to start without
 `JWT_SECRET`, and tenant OTPs are sent only through the SMS seam, never
 returned in the API response.
@@ -85,7 +95,9 @@ per channel log tables, so delivery is auditable either way.
 
 - `POST /api/auth/login`, `POST /api/auth/tenant/request-otp`, `POST /api/auth/tenant/verify-otp`
 - `GET /api/health` (no auth, for monitors and Docker health check)
-- `POST /api/uploads` (JPG, PNG, WEBP, PDF, MP4 up to 10 MB), served back under `/uploads/`
+- `POST /api/uploads` (JPG, PNG, WEBP, PDF, MP4 up to 10 MB, stored as DB
+  blobs), downloaded back through `GET /files/:id` (login required, JWT as
+  `?token=` for plain links)
 - CRUD: `/api/properties`, `/api/buildings`, `/api/floors`, `/api/units`, `/api/beds`, `/api/tenants`, `/api/rent-plans`, plus `/api/agreements` (occupancy transitions, terminate needs `confirm=true`).
 - Billing: `POST /api/jobs/generate-rent {month}`, `POST /api/jobs/mark-overdue`, `POST /api/payments {invoice_id, amount, payment_mode, confirm:true}`, `GET /api/invoices/:id`, `GET /api/receipts`, `GET /api/statements/:tenantId`.
 - Ops: `/api/complaints` (with photo attachments in `documents`, `GET /api/complaints/:id` for files), `/api/notifications`, `/api/dashboard/summary`, `/api/audit-logs`, tenant self service under `/api/tenant/*` (including `/api/tenant/statement` ledger and `/api/tenant/receipts/:id`).

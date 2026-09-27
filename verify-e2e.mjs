@@ -63,4 +63,15 @@ const cdet = await call('GET', `/api/complaints/${comp.complaint_id}`, null, T);
 ok(Array.isArray(cdet.attachments), 'complaint detail with attachments');
 try { await call('POST', '/api/uploads', {}, T); ok(false, 'empty upload rejected'); }
 catch { ok(true, 'empty upload rejected'); }
+// real blob upload roundtrip: upload PNG bytes, download them back
+const fd = new FormData();
+fd.append('file', new Blob([new Uint8Array([137, 80, 78, 71, 1, 2, 3])], { type: 'image/png' }), 'proof.png');
+const upRes = await fetch(B + '/api/uploads', { method: 'POST', headers: { Authorization: 'Bearer ' + T }, body: fd });
+const up = await upRes.json();
+ok(upRes.ok && up.file_path.startsWith('/files/'), `blob upload -> ${up.file_path}`);
+const dl = await fetch(B + up.file_path + '?token=' + encodeURIComponent(T));
+const buf = Buffer.from(await dl.arrayBuffer());
+ok(dl.ok && buf.equals(Buffer.from([137, 80, 78, 71, 1, 2, 3])), 'blob download bytes match');
+const noAuth = await fetch(B + up.file_path);
+ok(noAuth.status === 401, 'file download requires login');
 console.log('E2E done.');

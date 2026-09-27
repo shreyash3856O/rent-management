@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { BrowserRouter, Routes, Route, Link, NavLink, useNavigate, useLocation, useParams, Navigate } from 'react-router-dom';
-import { api, money, fmtDate, uploadFile } from './api.js';
+import { api, money, fmtDate, uploadFile, fileUrl } from './api.js';
 
 function useFetch(path, deps = []) {
   const [data, setData] = useState(null);
@@ -331,7 +331,7 @@ function AdminComplaints() {
       {(list || []).map((c) => <tr key={c.complaint_id}><td>{c.complaint_number}</td><td>{c.tenant_name}</td><td>{c.category}</td><td>{c.title}</td><td>{c.files ? <button onClick={() => showFiles(c)}>{c.files} file(s)</button> : 0}</td><td><span className="tag">{c.status}</span></td><td><button onClick={() => adv(c)}>Advance</button></td></tr>)}</tbody></table>
     {files ? <div><h2>Attachments for complaint {files.id}.</h2>
       <table className="grid"><thead><tr><th>File</th><th>Open</th></tr></thead><tbody>
-        {files.items.map((a) => <tr key={a.document_id}><td>{a.file_name}</td><td><a href={a.file_path} target="_blank" rel="noreferrer">Open</a></td></tr>)}
+        {files.items.map((a) => <tr key={a.document_id}><td>{a.file_name}</td><td><a href={fileUrl(a.file_path)} target="_blank" rel="noreferrer">Open</a></td></tr>)}
       </tbody></table></div> : null}
   </div>);
 }
@@ -442,7 +442,7 @@ function TDocs() {
     <h2>Agreements.</h2><table className="grid"><thead><tr><th>No</th><th>Status</th><th>Period</th></tr></thead><tbody>
       {(d.agreements || []).map((a) => <tr key={a.agreement_id}><td>{a.agreement_number}</td><td>{a.status}</td><td>{fmtDate(a.start_date)} to {fmtDate(a.end_date)}</td></tr>)}</tbody></table>
     <h2>ID documents.</h2><table className="grid"><thead><tr><th>Type</th><th>Status</th><th>File</th></tr></thead><tbody>
-      {(d.documents || []).map((x) => <tr key={x.tenant_document_id}><td>{x.document_type}</td><td>{x.verification_status}</td><td><a href={x.file_path} target="_blank" rel="noreferrer">Open</a></td></tr>)}</tbody></table>
+      {(d.documents || []).map((x) => <tr key={x.tenant_document_id}><td>{x.document_type}</td><td>{x.verification_status}</td><td>{x.file_path && x.file_path.startsWith('/files/') ? <a href={fileUrl(x.file_path)} target="_blank" rel="noreferrer">Open</a> : (x.file_path || '-')}</td></tr>)}</tbody></table>
   </div>);
 }
 function TNotices() {

@@ -31,3 +31,9 @@ export function money(n) {
   return 'Rs.' + v.toLocaleString('en-IN', { maximumFractionDigits: 2 });
 }
 export function fmtDate(s) { return s ? String(s).slice(0, 10) : ''; }
+// File downloads go through plain links, which cannot set headers,
+// so the JWT travels as ?token= (accepted by GET /files/:id).
+export function fileUrl(p) {
+  const t = localStorage.getItem('prm_token') || '';
+  return p + (p.includes('?') ? '&' : '?') + 'token=' + encodeURIComponent(t);
+}

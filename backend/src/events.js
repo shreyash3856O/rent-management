@@ -1,6 +1,7 @@
 // Central internal event bus. All modules publish here.
-// v1 channels: IN_APP + EMAIL (console/log tables). SMS/WhatsApp have log
-// tables and a clean interface (sendSms/sendWhatsapp stubs) for later.
+// v1 channels: IN_APP + EMAIL (SMTP when configured, console stub otherwise).
+// SMS sends for real when SMS_WEBHOOK_URL is set, else PENDING_STUB.
+// WhatsApp has log tables and a clean interface for later.
 const db = require('./db');
 
 const smsProviders = {
@@ -35,8 +36,8 @@ function renderTemplate(tpl, vars) {
   return out;
 }
 
-function logEmail(notificationId, address, subject, status, response) {
-  db.prepare(`INSERT INTO email_logs (notification_id, email_address, subject, status, response, sent_at)
+async function logEmail(notificationId, address, subject, status, response) {
+  await db.prepare(`INSERT INTO email_logs (notification_id, email_address, subject, status, response, sent_at)
     VALUES (?,?,?,?,?,datetime('now'))`).run(notificationId, address, subject, status, response);
 }
 
@@ -73,7 +74,7 @@ async function sendEmail(address, subject, message) {
 }
 
 async function dispatch({ eventCode, tenantId = null, userId = null, vars = {} }) {
-  const templates = db.prepare(
+  const templates = await db.prepare(
     `SELECT * FROM notification_templates WHERE event_code = ? AND status = 'ACTIVE'`).all(eventCode);
   // Always create at least an IN_APP notification even without template.
   const targets = templates.length ? templates : [{ channel: 'IN_APP', subject: null, message_template: eventCode, template_id: null }];
@@ -86,49 +87,49 @@ async function dispatch({ eventCode, tenantId = null, userId = null, vars = {} }
     let status = 'SENT';
     let sentAt = new Date().toISOString();
     if (channel === 'EMAIL') {
-      // v1: log + console (no external SMTP required). Plug real mailer here later.
-      console.log(`[EMAIL] to=${recipient} subject=${subject} msg=${message}`);
+      status = 'PENDING';
+      sentAt = null;
     } else if (channel === 'IN_APP') {
       status = 'DELIVERED';
     } else {
-      // SMS/WHATSAPP intentionally stubbed in v1.
+      // SMS/WHATSAPP only leave stub rows unless the SMS seam is configured.
       status = 'PENDING';
       sentAt = null;
     }
-    const info = db.prepare(`INSERT INTO notifications
+    const info = await db.prepare(`INSERT INTO notifications
       (tenant_id, user_id, template_id, event_code, channel, recipient, subject, message, status, sent_at)
       VALUES (?,?,?,?,?,?,?,?,?,?)`).run(
       tenantId, userId, t.template_id || null, eventCode, channel, recipient, subject, message, status, sentAt);
     const nid = info.lastInsertRowid;
     if (channel === 'EMAIL') {
       if (!recipient || !String(recipient).includes('@')) {
-        logEmail(nid, recipient, subject, 'FAILED', 'no email address on tenant record');
+        await logEmail(nid, recipient, subject, 'FAILED', 'no email address on tenant record');
       } else {
         const out = await sendEmail(recipient, subject, message);
         // notifications.status is CHECK-constrained; STUB_CONSOLE lives only
         // in email_logs, while the notification itself stays PENDING.
         const nStatus = out.status === 'SENT' ? 'SENT' : (out.status === 'FAILED' ? 'FAILED' : 'PENDING');
-        db.prepare(`UPDATE notifications SET status = ?, sent_at = CASE WHEN ? = 'SENT' THEN datetime('now') ELSE sent_at END WHERE notification_id = ?`)
+        await db.prepare(`UPDATE notifications SET status = ?, sent_at = CASE WHEN ? = 'SENT' THEN datetime('now') ELSE sent_at END WHERE notification_id = ?`)
           .run(nStatus, nStatus, nid);
-        logEmail(nid, recipient, subject, out.status, out.detail);
+        await logEmail(nid, recipient, subject, out.status, out.detail);
         status = nStatus;
       }
     }
     if (channel === 'SMS') {
       try {
         await smsProviders.sendSms(recipient, message);
-        db.prepare(`UPDATE notifications SET status = 'SENT', sent_at = datetime('now') WHERE notification_id = ?`).run(nid);
-        db.prepare(`INSERT INTO sms_logs (notification_id, mobile, status, response, sent_at)
+        await db.prepare(`UPDATE notifications SET status = 'SENT', sent_at = datetime('now') WHERE notification_id = ?`).run(nid);
+        await db.prepare(`INSERT INTO sms_logs (notification_id, mobile, status, response, sent_at)
           VALUES (?,?,?, ?,datetime('now'))`).run(nid, recipient, 'SENT', 'gateway accepted');
         status = 'SENT';
       } catch (e) {
         const stub = /not configured/.test(e.message);
-        db.prepare(`INSERT INTO sms_logs (notification_id, mobile, status, response, sent_at)
+        await db.prepare(`INSERT INTO sms_logs (notification_id, mobile, status, response, sent_at)
           VALUES (?,?,?, ?,datetime('now'))`).run(nid, recipient, stub ? 'PENDING_STUB' : 'FAILED', stub ? 'SMS disabled in v1; set SMS_WEBHOOK_URL' : e.message);
         status = stub ? 'PENDING' : 'FAILED';
       }
     }
-    if (channel === 'WHATSAPP') db.prepare(`INSERT INTO whatsapp_logs (notification_id, mobile, status, response, sent_at)
+    if (channel === 'WHATSAPP') await db.prepare(`INSERT INTO whatsapp_logs (notification_id, mobile, status, response, sent_at)
       VALUES (?,?,?,?,datetime('now'))`).run(nid, recipient, 'PENDING_STUB', 'WhatsApp disabled in v1');
     results.push({ notificationId: nid, channel, status });
   }
