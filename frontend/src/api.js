@@ -37,3 +37,22 @@ export function fileUrl(p) {
   const t = localStorage.getItem('prm_token') || '';
   return p + (p.includes('?') ? '&' : '?') + 'token=' + encodeURIComponent(t);
 }
+// Global busy indicator. Actions wrap themselves with withBusy(label, fn);
+// BusyOverlay (mounted once in App) shows the blob while anything runs.
+const busyListeners = new Set();
+let busyCount = 0;
+let busyLabel = '';
+function emitBusy() {
+  const s = { active: busyCount > 0, label: busyLabel };
+  busyListeners.forEach((fn) => { try { fn(s); } catch {} });
+}
+export const busy = {
+  show(label) { busyLabel = label || 'Working.'; busyCount++; emitBusy(); },
+  hide() { busyCount = Math.max(0, busyCount - 1); emitBusy(); },
+  subscribe(fn) { busyListeners.add(fn); return () => busyListeners.delete(fn); },
+  snapshot() { return { active: busyCount > 0, label: busyLabel }; },
+};
+export async function withBusy(label, fn) {
+  busy.show(label);
+  try { return await fn(); } finally { busy.hide(); }
+}

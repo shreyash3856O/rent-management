@@ -179,6 +179,7 @@ function crud(table, pk, moduleName, opts = {}) {
       // Explicit confirmation is enforced client-side; server requires confirm=true.
       if (req.query.confirm !== 'true' && (req.body || {}).confirm !== true)
         return res.status(400).json({ error: 'Confirmation required: resend with confirm=true' });
+      if (opts.onDelete) return opts.onDelete(req, res, old);
       await db.prepare(`DELETE FROM ${table} WHERE ${pk} = ?`).run(req.params.id);
       audit(req.auth.userId, moduleName, 'DELETE', table, req.params.id, old, null, req);
       res.json({ deleted: true });
@@ -197,7 +198,55 @@ app.use('/api/buildings', crud('buildings', 'building_id', 'PROPERTY'));
 app.use('/api/floors', crud('floors', 'floor_id', 'PROPERTY'));
 app.use('/api/units', crud('units', 'unit_id', 'PROPERTY'));
 app.use('/api/beds', crud('beds', 'bed_id', 'PROPERTY'));
-app.use('/api/tenants', crud('tenants', 'tenant_id', 'TENANT'));
+app.use('/api/tenants', crud('tenants', 'tenant_id', 'TENANT', {
+  // Real delete: refuses live money, otherwise wipes the tenant's whole
+  // trail (invoices, payments, receipts, complaints, docs, agreements) in
+  // one transaction. Audit rows are kept for traceability.
+  onDelete: async (req, res, old) => {
+    const tid = req.params.id;
+    const active = await db.prepare(`SELECT agreement_id FROM rental_agreements WHERE tenant_id = ? AND status = 'ACTIVE' LIMIT 1`).get(tid);
+    if (active) return res.status(409).json({ error: 'Cannot delete: tenant has an active agreement. Terminate it first.' });
+    const due = await db.prepare(`SELECT COALESCE(SUM(outstanding_amount),0) AS d FROM rent_invoices WHERE tenant_id = ?`).get(tid);
+    if (Number(due.d) > 0.005) return res.status(409).json({ error: 'Cannot delete: tenant still owes ' + due.d + '. Settle dues first.' });
+    try {
+      const wipe = db.transaction(async (tdb) => {
+        const payIds = (await tdb.prepare(`SELECT payment_id FROM payments WHERE tenant_id = ?`).all(tid)).map((p) => p.payment_id);
+        const invIds = (await tdb.prepare(`SELECT invoice_id FROM rent_invoices WHERE tenant_id = ?`).all(tid)).map((i) => i.invoice_id);
+        const compIds = (await tdb.prepare(`SELECT complaint_id FROM complaints WHERE tenant_id = ?`).all(tid)).map((c) => c.complaint_id);
+        if (payIds.length) {
+          const ph = payIds.map(() => '?').join(',');
+          await tdb.prepare(`DELETE FROM payment_transactions WHERE payment_id IN (${ph})`).run(...payIds);
+          await tdb.prepare(`DELETE FROM receipts WHERE payment_id IN (${ph})`).run(...payIds);
+          await tdb.prepare(`DELETE FROM documents WHERE entity_type = 'payment' AND entity_id IN (${ph})`).run(...payIds);
+          await tdb.prepare(`DELETE FROM payments WHERE payment_id IN (${ph})`).run(...payIds);
+        }
+        if (invIds.length) {
+          const ih = invIds.map(() => '?').join(',');
+          await tdb.prepare(`DELETE FROM invoice_items WHERE invoice_id IN (${ih})`).run(...invIds);
+          await tdb.prepare(`DELETE FROM rent_invoices WHERE invoice_id IN (${ih})`).run(...invIds);
+        }
+        if (compIds.length) {
+          const ch = compIds.map(() => '?').join(',');
+          await tdb.prepare(`DELETE FROM maintenance_tasks WHERE complaint_id IN (${ch})`).run(...compIds);
+          await tdb.prepare(`DELETE FROM documents WHERE entity_type = 'complaint' AND entity_id IN (${ch})`).run(...compIds);
+          await tdb.prepare(`DELETE FROM complaints WHERE complaint_id IN (${ch})`).run(...compIds);
+        }
+        await tdb.prepare(`DELETE FROM security_deposits WHERE tenant_id = ?`).run(tid);
+        await tdb.prepare(`DELETE FROM tenant_documents WHERE tenant_id = ?`).run(tid);
+        await tdb.prepare(`DELETE FROM tenant_kyc WHERE tenant_id = ?`).run(tid);
+        await tdb.prepare(`DELETE FROM notifications WHERE tenant_id = ?`).run(tid);
+        await tdb.prepare(`DELETE FROM notices WHERE tenant_id = ?`).run(tid);
+        await tdb.prepare(`DELETE FROM tenant_otps WHERE mobile = ?`).run(old.mobile);
+        await tdb.prepare(`DELETE FROM rental_agreements WHERE tenant_id = ?`).run(tid);
+        await tdb.prepare(`DELETE FROM tenants WHERE tenant_id = ?`).run(tid);
+        if (old.user_id) await tdb.prepare(`DELETE FROM users WHERE user_id = ?`).run(old.user_id);
+      });
+      await wipe();
+      audit(req.auth.userId, 'TENANT', 'DELETE', 'tenants', tid, old, null, req);
+      res.json({ deleted: true });
+    } catch (e) { res.status(400).json({ error: e.message }); }
+  },
+}));
 app.use('/api/tenant-documents', crud('tenant_documents', 'tenant_document_id', 'TENANT'));
 app.use('/api/rent-plans', crud('rent_plans', 'rent_plan_id', 'RENT'));
 app.use('/api/notices', crud('notices', 'notice_id', 'COMPLAINT'));
@@ -276,6 +325,9 @@ app.get('/api/invoices/:id', auth(), requirePerm('RENT', 'view'), async (req, re
   if (!inv) return res.status(404).json({ error: 'Not found' });
   inv.items = await db.prepare(`SELECT * FROM invoice_items WHERE invoice_id = ?`).all(req.params.id);
   inv.payments = await db.prepare(`SELECT * FROM payments WHERE invoice_id = ?`).all(req.params.id);
+  for (const p of inv.payments) {
+    p.attachments = await db.prepare(`SELECT document_id, file_name, file_path FROM documents WHERE entity_type = 'payment' AND entity_id = ?`).all(p.payment_id);
+  }
   inv.receipts = await db.prepare(`SELECT r.* FROM receipts r JOIN payments p ON p.payment_id = r.payment_id WHERE p.invoice_id = ?`).all(req.params.id);
   res.json(inv);
 });
@@ -294,10 +346,10 @@ app.post('/api/jobs/mark-overdue', auth(), requirePerm('RENT', 'edit'), async (r
   res.json(out);
 });
 app.post('/api/payments', auth(), requirePerm('PAYMENT', 'add'), async (req, res) => {
-  const { invoice_id, amount, payment_mode, payment_reference, confirm } = req.body || {};
+  const { invoice_id, amount, payment_mode, payment_reference, attachment_paths, confirm } = req.body || {};
   if (confirm !== true) return res.status(400).json({ error: 'Recording a payment requires confirm=true' });
   try {
-    const out = await svc.recordPayment(Number(invoice_id), Number(amount), payment_mode, payment_reference);
+    const out = await svc.recordPayment(Number(invoice_id), Number(amount), payment_mode, payment_reference, attachment_paths);
     audit(req.auth.userId, 'PAYMENT', 'RECORD', 'payments', out.paymentId, null, req.body, req);
     res.status(201).json(out);
   } catch (e) { res.status(e.status || 400).json({ error: e.message }); }
@@ -314,8 +366,18 @@ app.get('/api/statements/:tenantId', auth(), requirePerm('RENT', 'view'), async 
   res.json(await svc.tenantStatement(req.params.tenantId, from, to));
 });
 
-// Complaints (admin side)
-app.get('/api/complaints', auth(), requirePerm('COMPLAINT', 'view'), async (req, res) => {
+// Complaints: staff see everything, tenants see only their own.
+app.get('/api/complaints', auth(), async (req, res) => {
+  if (req.auth.kind === 'tenant') {
+    return res.json(await db.prepare(`SELECT c.*, p.property_name,
+        (SELECT COUNT(*) FROM documents d WHERE d.entity_type = 'complaint' AND d.entity_id = c.complaint_id) AS files
+      FROM complaints c LEFT JOIN properties p ON p.property_id = c.property_id
+      WHERE c.tenant_id = ? ORDER BY c.complaint_id DESC LIMIT 200`).all(req.auth.tenantId));
+  }
+  if (!req.auth.roleId) return res.status(403).json({ error: 'Forbidden' });
+  const perms = await db.prepare(`SELECT rp.can_view FROM role_permissions rp JOIN permissions p ON p.permission_id = rp.permission_id
+    WHERE rp.role_id = ? AND p.module_name = 'COMPLAINT'`).get(req.auth.roleId);
+  if (!perms || !perms.can_view) return res.status(403).json({ error: 'Forbidden: COMPLAINT view required' });
   res.json(await db.prepare(`SELECT c.*, t.full_name AS tenant_name, p.property_name,
       (SELECT COUNT(*) FROM documents d WHERE d.entity_type = 'complaint' AND d.entity_id = c.complaint_id) AS files
     FROM complaints c
@@ -514,6 +576,12 @@ cron.schedule('0 2 * * *', async () => {
   catch (e) { console.error('[CRON] overdue failed', e.message); }
 });
 
+// Upload rejections (wrong type, too large) as JSON, not an HTML error page.
+app.use((err, req, res, next) => {
+  if (err && (err.code === 'LIMIT_FILE_SIZE' || /Only JPG/.test(err.message || '')))
+    return res.status(400).json({ error: err.code === 'LIMIT_FILE_SIZE' ? 'File is larger than 10 MB.' : err.message });
+  next(err);
+});
 // Last-resort guards: no single request may ever take the process down.
 // (Express 4 does not forward async errors by itself.)
 process.on('unhandledRejection', (e) => console.error('[guard] unhandled rejection, server stays up:', e && e.message));

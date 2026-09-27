@@ -94,11 +94,13 @@ async function refreshInvoice(invoiceId, tdb = db) {
     .run(paid, outstanding, status, invoiceId);
 }
 
-// record_payment(invoice_id, amount, payment_mode, reference)
-async function recordPayment(invoiceId, amount, paymentMode, reference) {
+// record_payment(invoice_id, amount, payment_mode, reference, attachment_paths)
+async function recordPayment(invoiceId, amount, paymentMode, reference, attachmentPaths = []) {
   if (!(Number(amount) > 0)) throw Object.assign(new Error('Payment amount must be greater than 0'), { status: 400 });
   const inv = await db.prepare(`SELECT * FROM rent_invoices WHERE invoice_id = ?`).get(invoiceId);
   if (!inv) throw Object.assign(new Error('Invoice not found'), { status: 404 });
+  if (Number(amount) - Number(inv.outstanding_amount) > 0.005)
+    throw Object.assign(new Error(`Amount exceeds the outstanding balance of ${inv.outstanding_amount}`), { status: 400 });
   const txn = db.transaction(async (tdb) => {
     const p = await tdb.prepare(`INSERT INTO payments (invoice_id, tenant_id, payment_reference, amount, payment_mode, status)
       VALUES (?,?,?,?,?,'SUCCESS')`).run(invoiceId, inv.tenant_id, reference || null, Number(amount), paymentMode);
@@ -111,6 +113,11 @@ async function recordPayment(invoiceId, amount, paymentMode, reference) {
       .run(paymentId, receiptNumber, Number(amount));
     await tdb.prepare(`INSERT INTO payment_transactions (payment_id, amount, transaction_status, transaction_date)
       VALUES (?,?, 'SUCCESS', datetime('now'))`).run(paymentId, Number(amount));
+    // reference images (UPI screenshot and the like) linked to the payment
+    for (const ap of (attachmentPaths || []).filter(Boolean)) {
+      await tdb.prepare(`INSERT INTO documents (document_type, entity_type, entity_id, file_name, file_path)
+        VALUES ('PAYMENT_PROOF','payment',?,?,?)`).run(paymentId, String(ap).split('/').pop(), ap);
+    }
     return { paymentId, receiptNumber };
   });
   const out = await txn();
@@ -122,21 +129,25 @@ async function recordPayment(invoiceId, amount, paymentMode, reference) {
   return out;
 }
 
-// mark_overdue_invoices()
+// mark_overdue_invoices(): flip newly overdue rows, notify only those.
 async function markOverdueInvoices() {
-  const info = await db.prepare(`UPDATE rent_invoices SET status = 'OVERDUE'
+  const fresh = await db.prepare(`SELECT invoice_id FROM rent_invoices
+    WHERE outstanding_amount > 0 AND date(due_date) < date('now') AND status IN ('PENDING','PARTIALLY_PAID')`).all();
+  await db.prepare(`UPDATE rent_invoices SET status = 'OVERDUE'
     WHERE outstanding_amount > 0 AND date(due_date) < date('now') AND status IN ('PENDING','PARTIALLY_PAID')`).run();
-  // notify overdue (best effort, cap 50 per run)
-  const rows = await db.prepare(`SELECT i.*, t.full_name, t.email, t.mobile FROM rent_invoices i
-    JOIN tenants t ON t.tenant_id = i.tenant_id
-    WHERE i.status = 'OVERDUE' AND i.outstanding_amount > 0 ORDER BY i.due_date LIMIT 50`).all();
+  const rows = [];
+  for (const f of fresh.slice(0, 50)) {
+    const r = await db.prepare(`SELECT i.*, t.full_name, t.email, t.mobile FROM rent_invoices i
+      JOIN tenants t ON t.tenant_id = i.tenant_id WHERE i.invoice_id = ?`).get(f.invoice_id);
+    if (r) rows.push(r);
+  }
   for (const r of rows) {
     events.dispatch({
       eventCode: 'PAYMENT_OVERDUE', tenantId: r.tenant_id,
       vars: { tenant_name: r.full_name, amount: r.outstanding_amount, due_date: r.due_date, email: r.email, mobile: r.mobile },
     }).catch(() => {});
   }
-  return { marked: info.changes };
+  return { marked: fresh.length };
 }
 
 // tenant_statement(tenant_id, from_date, to_date)

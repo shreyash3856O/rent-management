@@ -99,7 +99,7 @@ per channel log tables, so delivery is auditable either way.
   blobs), downloaded back through `GET /files/:id` (login required, JWT as
   `?token=` for plain links)
 - CRUD: `/api/properties`, `/api/buildings`, `/api/floors`, `/api/units`, `/api/beds`, `/api/tenants`, `/api/rent-plans`, plus `/api/agreements` (occupancy transitions, terminate needs `confirm=true`).
-- Billing: `POST /api/jobs/generate-rent {month}`, `POST /api/jobs/mark-overdue`, `POST /api/payments {invoice_id, amount, payment_mode, confirm:true}`, `GET /api/invoices/:id`, `GET /api/receipts`, `GET /api/statements/:tenantId`.
+- Billing: `POST /api/jobs/generate-rent {month}`, `POST /api/jobs/mark-overdue`, `POST /api/payments {invoice_id, amount, payment_mode, attachment_paths, confirm:true}` (amounts over the outstanding balance are rejected; proof images appear in invoice detail), `GET /api/invoices/:id`, `GET /api/receipts`, `GET /api/statements/:tenantId`.
 - Ops: `/api/complaints` (with photo attachments in `documents`, `GET /api/complaints/:id` for files), `/api/notifications`, `/api/dashboard/summary`, `/api/audit-logs`, tenant self service under `/api/tenant/*` (including `/api/tenant/statement` ledger and `/api/tenant/receipts/:id`).
 - Receipts: `/api/receipts/:id` renders a printable receipt (Print or save PDF from the browser) with org, property, invoice, payment, and totals.
 
@@ -108,11 +108,14 @@ Cron runs monthly generation on the 1st at 01:00 and overdue marking daily at 02
 ## Honest scope check (what is real, what is next)
 
 Working product, verified by `verify-e2e.mjs` plus manual passes: auth, RBAC,
-hierarchy, tenants and KYC with real document uploads, agreements with
-automatic occupancy flips, monthly invoicing, payment recording with automatic
+hierarchy, tenants and KYC with real document uploads, tenant edit and guarded
+delete (refuses active agreements and unpaid dues, otherwise wipes the trail in
+one transaction), agreements with automatic occupancy flips, monthly invoicing,
+payment recording with proof images, overpayment protection, automatic
 invoice updates and printable receipts, tenant dashboard and ledger, complaint
 filing with photo attachments, in-app notifications, real email over SMTP when
 configured, audit logs, scheduled jobs, Docker deployment with health checks.
+A blob mascot overlay marks every mutation so progress is always visible.
 
 Deliberately not built (per the brief, Phases 4 to 7): GST calculation,
 property tax tracking UI, vendor and expense management UI, full accounting

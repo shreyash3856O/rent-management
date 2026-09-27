@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { BrowserRouter, Routes, Route, Link, NavLink, useNavigate, useLocation, useParams, Navigate } from 'react-router-dom';
-import { api, money, fmtDate, uploadFile, fileUrl } from './api.js';
+import { api, money, fmtDate, uploadFile, fileUrl, busy, withBusy } from './api.js';
 
 function useFetch(path, deps = []) {
   const [data, setData] = useState(null);
@@ -16,6 +16,15 @@ function Field({ label, error, children }) {
   return (<div><label>{label}</label>{children}{error ? <div className="field-err">{error}</div> : null}</div>);
 }
 function need(v) { return v == null || String(v).trim() === '' ? 'Required.' : null; }
+function BusyOverlay() {
+  const [s, setS] = useState(busy.snapshot());
+  useEffect(() => busy.subscribe(setS), []);
+  if (!s.active) return null;
+  return (<div className="busy-scrim"><div className="busy-box">
+    <div className="blob"><span className="eye left" /><span className="eye right" /></div>
+    <div className="busy-label">{s.label}</div>
+  </div></div>);
+}
 
 /* ---------- login ---------- */
 function AdminLogin() {
@@ -30,7 +39,7 @@ function AdminLogin() {
     <Field label="Password" error={need(password)}><input type="password" value={password} onChange={(e) => setPassword(e.target.value)} /></Field>
     {err ? <div className="field-err">{err}</div> : null}
     <p><button className="primary" disabled={!email || !password} onClick={async () => {
-      try { const r = await api.post('/api/auth/login', { email, password }); localStorage.setItem('prm_token', r.token); localStorage.setItem('prm_role', 'staff'); nav('/admin'); }
+      try { const r = await withBusy('Signing in.', async () => api.post('/api/auth/login', { email, password })); localStorage.setItem('prm_token', r.token); localStorage.setItem('prm_role', 'staff'); nav('/admin'); }
       catch (e) { setErr(e.message); }
     }}>Sign in</button> <Link className="btn" to="/tenant/login">Tenant sign in</Link></p>
   </div>);
@@ -45,12 +54,12 @@ function TenantLogin() {
     <h1>Rent Ledger. Tenant sign in.</h1>
     <p className="sub">Step 1, request OTP. Step 2, enter OTP. Demo OTP is shown on screen.</p>
     <Field label="Mobile" error={need(mobile)}><input value={mobile} onChange={(e) => setMobile(e.target.value)} /></Field>
-    <p><button onClick={async () => { try { const r = await api.post('/api/auth/tenant/request-otp', { mobile }); setSent(r.otp); setErr(null); } catch (e) { setErr(e.message); } }}>Request OTP</button></p>
+    <p><button onClick={async () => { try { const r = await withBusy('Requesting OTP.', async () => api.post('/api/auth/tenant/request-otp', { mobile })); setSent(r.otp); setErr(null); } catch (e) { setErr(e.message); } }}>Request OTP</button></p>
     {sent ? <div className="notice">Demo OTP for {mobile}: <b>{sent}</b>. Enter it below.</div> : null}
     <Field label="OTP"><input value={otp} onChange={(e) => setOtp(e.target.value)} /></Field>
     {err ? <div className="field-err">{err}</div> : null}
     <p><button className="primary" disabled={!mobile || !otp} onClick={async () => {
-      try { const r = await api.post('/api/auth/tenant/verify-otp', { mobile, otp }); localStorage.setItem('prm_token', r.token); localStorage.setItem('prm_role', 'tenant'); nav('/tenant'); }
+      try { const r = await withBusy('Verifying OTP.', async () => api.post('/api/auth/tenant/verify-otp', { mobile, otp })); localStorage.setItem('prm_token', r.token); localStorage.setItem('prm_role', 'tenant'); nav('/tenant'); }
       catch (e) { setErr(e.message); }
     }}>Verify and sign in</button> <Link className="btn" to="/login">Admin sign in</Link></p>
   </div>);
@@ -63,7 +72,7 @@ function AdminLayout() {
   const loc = useLocation();
   const items = [['/admin', 'Dashboard'], ['/admin/hierarchy', 'Properties'], ['/admin/tenants', 'Tenants'], ['/admin/agreements', 'Agreements'], ['/admin/invoices', 'Invoices'], ['/admin/payments', 'Payments'], ['/admin/complaints', 'Complaints'], ['/admin/audit', 'Audit log']];
   return (<div><div className="topbar"><span className="brand">Rent Ledger. Admin.</span>
-    <span className="actions"><Link className="btn" to="/tenant">Tenant view</Link> <button onClick={() => { if (window.confirm('Sign out now?')) logout(nav); }}>Sign out</button></span></div>
+    <span className="actions"><span className="sub">Signed in</span> <button onClick={() => { if (window.confirm('Sign out now?')) logout(nav); }}>Sign out</button></span></div>
     <div className="layout"><nav className="sidenav">{items.map(([p, l]) => <NavLink key={p} to={p} end={p === '/admin'} className={({ isActive }) => isActive ? 'active' : ''}>{l}</NavLink>)}</nav>
       <div className="content"><div key={loc.pathname} className="page"><Routes>
         <Route index element={<Dashboard />} />
@@ -167,20 +176,57 @@ function Hierarchy() {
 }
 function Tenants() {
   const [list, , load] = useFetch('/api/tenants');
-  const [kyc] = useFetch('/api/kyc');
+  const [kyc, , loadKyc] = useFetch('/api/kyc');
   const [f, setF] = useState({ full_name: '', mobile: '', email: '' });
   const [err, setErr] = useState(null);
+  const [note, setNote] = useState(null);
+  const [editing, setEditing] = useState(null);
   const [doc, setDoc] = useState({ tenant_id: '', document_type: 'AADHAAR', document_number: '' });
   const [docFile, setDocFile] = useState(null);
   const set = (k, v) => setF({ ...f, [k]: v });
+  const setE = (k, v) => setEditing({ ...editing, [k]: v });
+  const startEdit = (t) => { setEditing({ ...t }); setNote(null); setErr(null); };
+  const saveEdit = async () => {
+    try {
+      if (need(editing.full_name) || need(editing.mobile)) { setErr('Name and mobile are required.'); return; }
+      await withBusy('Saving tenant.', async () => {
+        await api.put(`/api/tenants/${editing.tenant_id}`, {
+          full_name: editing.full_name, mobile: editing.mobile, email: editing.email || null,
+          gender: editing.gender || null, occupation: editing.occupation || null, company_name: editing.company_name || null,
+          address: editing.address || null, emergency_contact_name: editing.emergency_contact_name || null,
+          emergency_contact_mobile: editing.emergency_contact_mobile || null, id_type: editing.id_type || null,
+          id_number: editing.id_number || null, status: editing.status || 'ACTIVE',
+        });
+      });
+      setEditing(null); setErr(null); setNote('Tenant saved.'); load();
+    } catch (e) { setErr(e.message); }
+  };
+  const removeTenant = async (t) => {
+    if (!window.confirm(`Delete tenant ${t.full_name}? Their invoices, payments, complaints and documents go with them. Active agreements and unpaid dues block deletion.`)) return;
+    try {
+      await withBusy('Deleting tenant.', async () => { await api.del(`/api/tenants/${t.tenant_id}`, true); });
+      setErr(null); setNote(`Tenant ${t.full_name} deleted.`); load(); loadKyc();
+    } catch (e) { setErr(e.message); }
+  };
+  const markVerified = async (t) => {
+    try {
+      await withBusy('Updating KYC.', async () => { await api.put(`/api/kyc/${t.tenant_id}`, { status: 'VERIFIED', remarks: 'Verified at counter' }); });
+      setErr(null); setNote(`KYC verified for ${t.full_name}.`); loadKyc();
+    } catch (e) { setErr(e.message); }
+  };
   return (<div><h1>Tenants and KYC.</h1><p className="sub">Register a tenant, then set KYC status. Verification detail stays on this page.</p>
     <div className="form-grid">
       <Field label="Full name" error={need(f.full_name)}><input value={f.full_name} onChange={(e) => set('full_name', e.target.value)} /></Field>
       <Field label="Mobile" error={need(f.mobile)}><input value={f.mobile} onChange={(e) => set('mobile', e.target.value)} /></Field>
       <Field label="Email"><input value={f.email} onChange={(e) => set('email', e.target.value)} /></Field></div>
     {err ? <div className="field-err">{err}</div> : null}
+    {note ? <div className="notice">{note}</div> : null}
     <p><button className="primary" onClick={async () => {
-      try { if (need(f.full_name) || need(f.mobile)) { setErr('Name and mobile are required.'); return; } await api.post('/api/tenants', f); setF({ full_name: '', mobile: '', email: '' }); setErr(null); load(); } catch (e) { setErr(e.message); }
+      try {
+        if (need(f.full_name) || need(f.mobile)) { setErr('Name and mobile are required.'); return; }
+        await withBusy('Registering tenant.', async () => { await api.post('/api/tenants', f); });
+        setF({ full_name: '', mobile: '', email: '' }); setErr(null); setNote('Tenant registered.'); load();
+      } catch (e) { setErr(e.message); }
     }}>Register tenant</button></p>
     <h2>Add a KYC document.</h2>
     <div className="form-grid">
@@ -191,17 +237,35 @@ function Tenants() {
     <p><button onClick={async () => {
       try {
         if (!doc.tenant_id || !docFile) { setErr('Pick a tenant and a file first.'); return; }
-        const up = await uploadFile(docFile);
-        await api.post('/api/tenant-documents', { tenant_id: Number(doc.tenant_id), document_type: doc.document_type, document_number: doc.document_number || null, file_path: up.file_path });
-        setErr(null); setDoc({ tenant_id: '', document_type: 'AADHAAR', document_number: '' }); setDocFile(null);
+        await withBusy('Uploading document.', async () => {
+          const up = await uploadFile(docFile);
+          await api.post('/api/tenant-documents', { tenant_id: Number(doc.tenant_id), document_type: doc.document_type, document_number: doc.document_number || null, file_path: up.file_path });
+        });
+        setErr(null); setNote('Document uploaded.'); setDoc({ tenant_id: '', document_type: 'AADHAAR', document_number: '' }); setDocFile(null);
       } catch (e) { setErr(e.message); }
     }}>Upload document</button></p>
+    {editing ? <div><h2>Editing {editing.full_name}.</h2>
+      <div className="form-grid">
+        <Field label="Full name" error={need(editing.full_name)}><input value={editing.full_name || ''} onChange={(e) => setE('full_name', e.target.value)} /></Field>
+        <Field label="Mobile" error={need(editing.mobile)}><input value={editing.mobile || ''} onChange={(e) => setE('mobile', e.target.value)} /></Field>
+        <Field label="Email"><input value={editing.email || ''} onChange={(e) => setE('email', e.target.value)} /></Field>
+        <Field label="Gender"><select value={editing.gender || ''} onChange={(e) => setE('gender', e.target.value)}><option value="">Select</option><option>MALE</option><option>FEMALE</option><option>OTHER</option></select></Field>
+        <Field label="Occupation"><input value={editing.occupation || ''} onChange={(e) => setE('occupation', e.target.value)} /></Field>
+        <Field label="Company"><input value={editing.company_name || ''} onChange={(e) => setE('company_name', e.target.value)} /></Field>
+        <Field label="Address"><input value={editing.address || ''} onChange={(e) => setE('address', e.target.value)} /></Field>
+        <Field label="Emergency contact"><input value={editing.emergency_contact_name || ''} onChange={(e) => setE('emergency_contact_name', e.target.value)} /></Field>
+        <Field label="Emergency mobile"><input value={editing.emergency_contact_mobile || ''} onChange={(e) => setE('emergency_contact_mobile', e.target.value)} /></Field>
+        <Field label="ID type"><select value={editing.id_type || ''} onChange={(e) => setE('id_type', e.target.value)}><option value="">Select</option><option>AADHAAR</option><option>PAN</option><option>PASSPORT</option><option>DRIVING_LICENSE</option><option>VOTER_ID</option><option>OTHER</option></select></Field>
+        <Field label="ID number"><input value={editing.id_number || ''} onChange={(e) => setE('id_number', e.target.value)} /></Field>
+        <Field label="Status"><select value={editing.status || 'ACTIVE'} onChange={(e) => setE('status', e.target.value)}><option>ACTIVE</option><option>INACTIVE</option><option>BLACKLISTED</option></select></Field></div>
+      <p><button className="primary" onClick={saveEdit}>Save changes</button> <button onClick={() => setEditing(null)}>Cancel</button></p></div> : null}
     <table className="grid"><thead><tr><th>Name</th><th>Mobile</th><th>KYC</th><th>Action</th></tr></thead><tbody>
       {(list || []).map((t) => {
         const k = (kyc || []).find((x) => x.tenant_id === t.tenant_id);
         return <tr key={t.tenant_id}><td>{t.full_name}</td><td>{t.mobile}</td><td><span className="tag">{k ? k.status : 'KYC_PENDING'}</span>{k && k.verified_by ? ` by ${k.verified_by} on ${fmtDate(k.verification_date)}` : ''}</td>
-          <td className="row-actions"><button onClick={async () => { await api.put(`/api/kyc/${t.tenant_id}`, { status: 'VERIFIED', remarks: 'Verified at counter' }); window.location.reload(); }}>Mark verified</button>
-            <button onClick={async () => { if (window.confirm(`Delete tenant ${t.full_name}? This cannot be undone.`)) { await api.del(`/api/tenants/${t.tenant_id}`, true); load(); } }}>Delete</button></td></tr>;
+          <td className="row-actions"><button onClick={() => startEdit(t)}>Edit</button>
+            <button onClick={() => markVerified(t)}>Mark verified</button>
+            <button onClick={() => removeTenant(t)}>Delete</button></td></tr>;
       })}</tbody></table>
   </div>);
 }
@@ -222,11 +286,11 @@ function Agreements() {
       <Field label="Status"><select value={f.status} onChange={(e) => set('status', e.target.value)}><option>DRAFT</option><option>PENDING_SIGNATURE</option><option>ACTIVE</option></select></Field></div>
     {err ? <div className="field-err">{err}</div> : null}
     <p><button className="primary" onClick={async () => {
-      try { await api.post('/api/agreements', { ...f, tenant_id: Number(f.tenant_id), property_id: Number(f.property_id), monthly_rent: Number(f.monthly_rent) }); setErr(null); load(); } catch (e) { setErr(e.message); }
+      try { await withBusy('Creating agreement.', async () => api.post('/api/agreements', { ...f, tenant_id: Number(f.tenant_id), property_id: Number(f.property_id), monthly_rent: Number(f.monthly_rent) })); setErr(null); load(); } catch (e) { setErr(e.message); }
     }}>Create agreement</button></p>
     <table className="grid"><thead><tr><th>No</th><th>Tenant</th><th>Rent</th><th>Status</th><th>Action</th></tr></thead><tbody>
       {(list || []).map((a) => <tr key={a.agreement_id}><td>{a.agreement_number}</td><td>{a.tenant_name}</td><td>{money(a.monthly_rent)}</td><td><span className="tag">{a.status}</span></td>
-        <td className="row-actions">{a.status === 'ACTIVE' ? <button onClick={async () => { if (window.confirm(`Terminate agreement ${a.agreement_number}? The room or bed returns to Available.`)) { await api.put(`/api/agreements/${a.agreement_id}`, { status: 'TERMINATED', confirm: true }); load(); } }}>Terminate</button> : <button onClick={async () => { await api.put(`/api/agreements/${a.agreement_id}`, { status: 'ACTIVE' }); load(); }}>Activate</button>}</td></tr>)}</tbody></table>
+        <td className="row-actions">{a.status === 'ACTIVE' ? <button onClick={async () => { if (window.confirm(`Terminate agreement ${a.agreement_number}? The room or bed returns to Available.`)) { await withBusy('Terminating agreement.', async () => api.put(`/api/agreements/${a.agreement_id}`, { status: 'TERMINATED', confirm: true })); load(); } }}>Terminate</button> : <button onClick={async () => { await withBusy('Activating agreement.', async () => api.put(`/api/agreements/${a.agreement_id}`, { status: 'ACTIVE' })); load(); }}>Activate</button>}</td></tr>)}</tbody></table>
   </div>);
 }
 function Invoices() {
@@ -234,6 +298,7 @@ function Invoices() {
   const [month, setMonth] = useState(() => new Date().toISOString().slice(0, 7) + '-01');
   const [msg, setMsg] = useState(null);
   const [pay, setPay] = useState({ invoice_id: '', amount: '', payment_mode: 'UPI', payment_reference: '' });
+  const [payFiles, setPayFiles] = useState([]);
   const [sel, setSel] = useState(null);
   const [detail, setDetail] = useState(null);
   const openDetail = async (id) => {
@@ -242,37 +307,44 @@ function Invoices() {
     try { setDetail(await api.get(`/api/invoices/${id}`)); } catch (e) { setMsg(e.message); }
   };
   const gen = async () => {
-    try { const r = await api.post('/api/jobs/generate-rent', { month }); setMsg(`Generated ${r.created} invoices, skipped ${r.skipped} duplicates for ${r.month}.`); load(); }
-    catch (e) { setMsg(e.message); }
+    try {
+      const r = await withBusy('Generating invoices.', async () => api.post('/api/jobs/generate-rent', { month }));
+      setMsg(`Generated ${r.created} invoices, skipped ${r.skipped} duplicates for ${r.month}.`); load();
+    } catch (e) { setMsg(e.message); }
   };
   const record = async () => {
     try {
       if (!pay.invoice_id || !(Number(pay.amount) > 0)) { setMsg('Select an invoice and enter an amount greater than 0.'); return; }
       if (!window.confirm(`Record ${money(pay.amount)} against this invoice? Receipt is generated automatically.`)) return;
-      await api.post('/api/payments', { invoice_id: Number(pay.invoice_id), amount: Number(pay.amount), payment_mode: pay.payment_mode, payment_reference: pay.payment_reference, confirm: true });
-      setMsg('Payment recorded. Invoice totals and receipt updated.'); setPay({ invoice_id: '', amount: '', payment_mode: 'UPI', payment_reference: '' }); load();
+      await withBusy('Recording payment.', async () => {
+        const paths = [];
+        for (const fl of payFiles) { paths.push((await uploadFile(fl)).file_path); }
+        await api.post('/api/payments', { invoice_id: Number(pay.invoice_id), amount: Number(pay.amount), payment_mode: pay.payment_mode, payment_reference: pay.payment_reference, attachment_paths: paths, confirm: true });
+      });
+      setMsg('Payment recorded. Invoice totals and receipt updated.'); setPay({ invoice_id: '', amount: '', payment_mode: 'UPI', payment_reference: '' }); setPayFiles([]); load();
     } catch (e) { setMsg(e.message); }
   };
   return (<div><h1>Rent invoices.</h1><p className="sub">One invoice per active agreement per month. Format is INV-YYYYMM-000000.</p>
     <div className="toolbar"><input type="date" value={month} onChange={(e) => setMonth(e.target.value)} /><button className="primary" onClick={gen}>Generate month</button>
-      <button onClick={async () => { await api.post('/api/jobs/mark-overdue', {}); load(); }}>Mark overdue</button></div>
+      <button onClick={async () => { await withBusy('Marking overdue.', async () => api.post('/api/jobs/mark-overdue', {})); setMsg('Overdue invoices marked.'); load(); }}>Mark overdue</button></div>
     {msg ? <div className="notice">{msg}</div> : null}
     <h2>Record payment.</h2>
     <div className="form-grid">
       <Field label="Invoice"><select value={pay.invoice_id} onChange={(e) => setPay({ ...pay, invoice_id: e.target.value })}><option value="">Select</option>{(list || []).filter((i) => i.outstanding_amount > 0).map((i) => <option key={i.invoice_id} value={i.invoice_id}>{i.invoice_number} ({money(i.outstanding_amount)} due)</option>)}</select></Field>
       <Field label="Amount"><input value={pay.amount} onChange={(e) => setPay({ ...pay, amount: e.target.value })} /></Field>
       <Field label="Mode"><select value={pay.payment_mode} onChange={(e) => setPay({ ...pay, payment_mode: e.target.value })}><option>UPI</option><option>CASH</option><option>CHEQUE</option><option>NET_BANKING</option><option>CREDIT_CARD</option><option>DEBIT_CARD</option><option>BANK_TRANSFER</option></select></Field>
-      <Field label="Reference"><input value={pay.payment_reference} onChange={(e) => setPay({ ...pay, payment_reference: e.target.value })} /></Field></div>
+      <Field label="Reference"><input value={pay.payment_reference} onChange={(e) => setPay({ ...pay, payment_reference: e.target.value })} /></Field>
+      <Field label="Proof images (UPI screenshot, optional)"><input type="file" accept=".jpg,.jpeg,.png,.webp,.pdf" multiple onChange={(e) => setPayFiles(Array.from(e.target.files || []))} /></Field></div>
     <p><button className="primary" onClick={record}>Record payment</button></p>
     <table className="grid"><thead><tr><th>Number</th><th>Tenant</th><th>Month</th><th>Due</th><th>Total</th><th>Paid</th><th>Due bal</th><th>Status</th><th>Detail</th></tr></thead><tbody>
       {(list || []).map((i) => <tr key={i.invoice_id}><td>{i.invoice_number}</td><td>{i.tenant_name}</td><td>{fmtDate(i.invoice_month)}</td><td>{fmtDate(i.due_date)}</td><td>{money(i.total_amount)}</td><td>{money(i.paid_amount)}</td><td>{money(i.outstanding_amount)}</td><td>{i.status === 'OVERDUE' ? <span className="tag overdue">OVERDUE</span> : <span className="tag">{i.status}</span>}</td><td><button onClick={() => openDetail(i.invoice_id)}>{sel === i.invoice_id ? 'Hide' : 'View'}</button></td></tr>)}</tbody></table>
     {detail ? <div><h2>Invoice {detail.invoice_number}: line items, payments, receipts.</h2>
       <table className="grid"><thead><tr><th>Item</th><th>Description</th><th>Qty</th><th>Rate</th><th>Amount</th></tr></thead><tbody>
         {(detail.items || []).map((it) => <tr key={it.invoice_item_id}><td>{it.item_type}</td><td>{it.description}</td><td>{it.quantity}</td><td>{money(it.rate)}</td><td>{money(it.amount)}</td></tr>)}</tbody></table>
-      <table className="grid"><thead><tr><th>Payment</th><th>Amount</th><th>Mode</th><th>Status</th><th>Receipt</th></tr></thead><tbody>
+      <table className="grid"><thead><tr><th>Payment</th><th>Amount</th><th>Mode</th><th>Status</th><th>Proof</th><th>Receipt</th></tr></thead><tbody>
         {(detail.payments || []).map((p) => {
           const r = (detail.receipts || []).find((x) => x.payment_id === p.payment_id);
-          return <tr key={p.payment_id}><td>{p.payment_reference || p.payment_id}</td><td>{money(p.amount)}</td><td>{p.payment_mode}</td><td>{p.status}</td><td>{r ? <Link to={`/admin/receipt/${r.receipt_id}`}>{r.receipt_number}</Link> : '-'}</td></tr>;
+          return <tr key={p.payment_id}><td>{p.payment_reference || p.payment_id}</td><td>{money(p.amount)}</td><td>{p.payment_mode}</td><td>{p.status}</td><td>{(p.attachments || []).length ? p.attachments.map((a) => <span key={a.document_id}><a href={fileUrl(a.file_path)} target="_blank" rel="noreferrer">{a.file_name}</a> </span>) : '-'}</td><td>{r ? <Link to={`/admin/receipt/${r.receipt_id}`}>{r.receipt_number}</Link> : '-'}</td></tr>;
         })}</tbody></table></div> : null}
   </div>);
 }
@@ -323,7 +395,7 @@ function AdminComplaints() {
     const flow = ['OPEN', 'ASSIGNED', 'IN_PROGRESS', 'RESOLVED', 'CLOSED'];
     const nxt = flow[flow.indexOf(c.status) + 1];
     if (!nxt) return;
-    await api.put(`/api/complaints/${c.complaint_id}`, { status: nxt });
+    await withBusy('Updating complaint.', async () => api.put(`/api/complaints/${c.complaint_id}`, { status: nxt }));
     load();
   };
   return (<div><h1>Complaints.</h1><p className="sub">Flow is Open, Assigned, In Progress, Resolved, Closed. Steps only move forward.</p>
@@ -348,7 +420,7 @@ function TenantLayout() {
   const nav = useNavigate();
   const loc = useLocation();
   return (<div><div className="topbar"><span className="brand">Rent Ledger. Tenant.</span>
-    <span className="actions"><Link className="btn" to="/admin">Admin view</Link> <button onClick={() => { if (window.confirm('Sign out now?')) logout(nav); }}>Sign out</button></span></div>
+    <span className="actions"><span className="sub">Signed in</span> <button onClick={() => { if (window.confirm('Sign out now?')) logout(nav); }}>Sign out</button></span></div>
     <div className="tenant-wrap"><nav className="segnav">
       <NavLink to="/tenant" end>Home</NavLink><NavLink to="/tenant/rent">Rent</NavLink><NavLink to="/tenant/complaints">Complaints</NavLink><NavLink to="/tenant/docs">Documents</NavLink><NavLink to="/tenant/notices">Notices</NavLink>
     </nav><div key={loc.pathname} className="page"><Routes>
@@ -374,7 +446,7 @@ function TRent() {
   const [from, setFrom] = useState(() => new Date().getFullYear() + '-01-01');
   const [to, setTo] = useState(() => new Date().toISOString().slice(0, 10));
   const [stmt, setStmt] = useState(null);
-  const loadStmt = async () => { try { setStmt(await api.get(`/api/tenant/statement?from=${from}&to=${to}`)); } catch (e) { setStmt({ error: e.message }); } };
+  const loadStmt = async () => { try { setStmt(await withBusy('Loading statement.', async () => api.get(`/api/tenant/statement?from=${from}&to=${to}`))); } catch (e) { setStmt({ error: e.message }); } };
   useEffect(() => { loadStmt(); }, []);
   return (<div><h1>Rent and receipts.</h1><p className="sub">Current invoice first, then history. Payment is recorded by the office in v1.</p>
     <h2>Current and past invoices.</h2>
@@ -391,12 +463,14 @@ function TRent() {
 }
 function TComplaints() {
   const [me] = useFetch('/api/tenant/me');
-  const [list, , load] = useFetch('/api/tenant/me');
   const [rows, setRows] = useState([]);
   const [f, setF] = useState({ category: 'PLUMBING', title: '', description: '' });
   const [file, setFile] = useState(null);
   const [msg, setMsg] = useState(null);
-  const loadList = async () => { try { const r = await api.get('/api/complaints'); setRows(r.filter((x) => x.tenant_id === me?.tenant?.tenant_id)); } catch {} };
+  const loadList = async () => {
+    try { setRows(await withBusy('Loading complaints.', async () => api.get('/api/complaints'))); }
+    catch (e) { setMsg(e.message); }
+  };
   useEffect(() => { if (me) loadList(); }, [me]);
   return (<div><h1>Complaints.</h1><p className="sub">File a complaint and track it to closure.</p>
     <Field label="Category"><select value={f.category} onChange={(e) => setF({ ...f, category: e.target.value })}><option>ELECTRICITY</option><option>WATER</option><option>PLUMBING</option><option>AC</option><option>FURNITURE</option><option>INTERNET</option><option>CLEANING</option><option>SECURITY</option><option>OTHER</option></select></Field>
@@ -407,9 +481,11 @@ function TComplaints() {
     <p><button className="primary" onClick={async () => {
       try {
         if (need(f.title)) { setMsg('Title is required.'); return; }
-        let attachment_path = null;
-        if (file) { setMsg('Uploading photo.'); attachment_path = (await uploadFile(file)).file_path; }
-        await api.post('/api/complaints', { property_id: me.agreement?.property_id, category: f.category, title: f.title, description: f.description, attachment_path });
+        await withBusy(file ? 'Uploading photo and filing.' : 'Filing complaint.', async () => {
+          let attachment_path = null;
+          if (file) attachment_path = (await uploadFile(file)).file_path;
+          await api.post('/api/complaints', { property_id: me.agreement?.property_id, category: f.category, title: f.title, description: f.description, attachment_path });
+        });
         setMsg('Complaint filed.'); setF({ category: 'PLUMBING', title: '', description: '' }); setFile(null); loadList();
       } catch (e) { setMsg(e.message); }
     }}>File complaint</button></p>
@@ -434,8 +510,10 @@ function TDocs() {
     <p><button className="primary" onClick={async () => {
       try {
         if (!file) { setMsg('Pick a file first.'); return; }
-        const r = await uploadFile(file);
-        await api.post('/api/tenant/documents', { document_type: up.document_type, document_number: up.document_number || null, file_path: r.file_path });
+        await withBusy('Uploading document.', async () => {
+          const r = await uploadFile(file);
+          await api.post('/api/tenant/documents', { document_type: up.document_type, document_number: up.document_number || null, file_path: r.file_path });
+        });
         setMsg('Uploaded. The office will verify it.'); setFile(null); load();
       } catch (e) { setMsg(e.message); }
     }}>Upload</button></p>
@@ -458,10 +536,15 @@ function TNotices() {
 function Guard({ role, children }) {
   const t = localStorage.getItem('prm_token');
   if (!t) return <Navigate to={role === 'tenant' ? '/tenant/login' : '/login'} />;
+  // Tenants stay in the tenant app; staff stay in admin. This stops
+  // confusing permission errors from cross opened URLs.
+  const mine = localStorage.getItem('prm_role');
+  if (role === 'staff' && mine === 'tenant') return <Navigate to="/tenant" />;
+  if (role === 'tenant' && mine !== 'tenant') return <Navigate to="/admin" />;
   return children;
 }
 export default function App() {
-  return (<BrowserRouter><Routes>
+  return (<BrowserRouter><BusyOverlay /><Routes>
     <Route path="/login" element={<AdminLogin />} />
     <Route path="/tenant/login" element={<TenantLogin />} />
     <Route path="/admin/*" element={<Guard role="staff"><AdminLayout /></Guard>} />

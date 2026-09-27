@@ -79,4 +79,27 @@ const delRes = await fetch(B + '/api/tenants/1?confirm=true', { method: 'DELETE'
 ok(delRes.status === 409, 'delete of referenced tenant refused with 409');
 const stillUp = await call('GET', '/api/health');
 ok(stillUp.ok === true, 'server still up after refused delete');
+// tenant edit
+const edited = await call('PUT', '/api/tenants/2', { occupation: 'Senior Designer' }, T);
+ok(edited.occupation === 'Senior Designer', 'tenant details editable');
+// payment with reference image + overpayment guard
+const fd2 = new FormData();
+fd2.append('file', new Blob([new Uint8Array([1, 2, 3, 4])], { type: 'image/png' }), 'upi.png');
+const up2 = await (await fetch(B + '/api/uploads', { method: 'POST', headers: { Authorization: 'Bearer ' + T }, body: fd2 })).json();
+const pay2 = await call('POST', '/api/payments', { invoice_id: inv.invoice_id, amount: 1000, payment_mode: 'UPI', payment_reference: 'UPI-2', attachment_paths: [up2.file_path], confirm: true }, T);
+ok(!!pay2.paymentId, 'payment with proof image recorded');
+const det2 = await call('GET', `/api/invoices/${inv.invoice_id}`, null, T);
+const withProof = det2.payments.find((p) => p.payment_id === pay2.paymentId);
+ok(withProof && withProof.attachments.length === 1, 'proof image linked to payment');
+try { await call('POST', '/api/payments', { invoice_id: inv.invoice_id, amount: 999999, payment_mode: 'UPI', confirm: true }, T); ok(false, 'overpayment rejected'); }
+catch (e) { ok(/exceeds/.test(e.message), 'overpayment rejected with clear message'); }
+// full tenant wipe for a tenant with no live money
+const tmp = await call('POST', '/api/tenants', { full_name: 'Temp User', mobile: '9111111111' }, T);
+const wiped = await fetch(B + `/api/tenants/${tmp.tenant_id}?confirm=true`, { method: 'DELETE', headers: { Authorization: 'Bearer ' + T } });
+ok(wiped.ok, 'tenant with no dues deletes cleanly');
+const gone = await fetch(B + `/api/tenants/${tmp.tenant_id}`, { headers: { Authorization: 'Bearer ' + T } });
+ok(gone.status === 404, 'deleted tenant is gone');
+// tenant sees own complaints now
+const tcomp = await call('GET', '/api/complaints', null, TT);
+ok(tcomp.length >= 1 && tcomp.every((c) => c.tenant_id === 1), 'tenant lists own complaints');
 console.log('E2E done.');
