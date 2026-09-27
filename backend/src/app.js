@@ -530,6 +530,19 @@ app.get('/api/message-logs', auth(), requirePerm('REPORTS', 'view'), async (req,
     ORDER BY s.sms_id DESC LIMIT 200`).all();
   res.json({ emails, sms });
 });
+// One click mail diagnostics: key presence, sender, and raw reachability,
+// so a missing mail is a five second check instead of a log hunt.
+app.get('/api/diag/email', auth(), requirePerm('REPORTS', 'view'), async (req, res) => {
+  const events = require('./events');
+  const brevoKey = String(process.env.BREVO_API_KEY || '').trim();
+  res.json({
+    brevoKeyPresent: brevoKey.length > 0,
+    brevoKeyLength: brevoKey.length,
+    sender: String(process.env.BREVO_SENDER || '').trim() || null,
+    smtpHost: process.env.SMTP_HOST || null,
+    probe: await events.probeBrevo(),
+  });
+});
 app.get('/api/permissions/me', auth(), async (req, res) => {
   if (req.auth.kind === 'tenant') return res.json({ role: 'TENANT', permissions: [] });
   const rows = await db.prepare(`SELECT p.module_name, p.permission_name, rp.can_view, rp.can_add, rp.can_edit, rp.can_delete, rp.can_approve

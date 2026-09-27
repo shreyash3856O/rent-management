@@ -546,11 +546,20 @@ function AdminComplaints() {
 }
 function Audit() {
   const [list] = useFetch('/api/audit-logs');
-  const [logs] = useFetch('/api/message-logs');
+  const [logs, , loadLogs] = useFetch('/api/message-logs');
+  const [diag, setDiag] = useState(null);
+  const testMail = async () => {
+    try {
+      const d = await withBusy('Testing mail connection.', async () => api.get('/api/diag/email'));
+      setDiag(d); loadLogs();
+    } catch (e) { setDiag({ error: e.message }); }
+  };
   return (<div><h1>Audit log.</h1><p className="sub">Every financial or tenant data change is recorded with user, action and timestamp.</p>
     <table className="grid"><thead><tr><th>When</th><th>User</th><th>Module</th><th>Action</th><th>Entity</th></tr></thead><tbody>
       {(list || []).map((a) => <tr key={a.audit_id}><td>{a.created_at}</td><td>{a.user_id}</td><td>{a.module_name}</td><td>{a.action}</td><td>{a.entity_type} {a.entity_id}</td></tr>)}</tbody></table>
     <h2>Mail delivery.</h2><p className="sub">SENT reached the mailbox. PENDING means mail is not configured (set SMTP on the server). FAILED carries the provider reason.</p>
+    <div className="toolbar"><button onClick={testMail}>Test mail connection</button></div>
+    {diag ? <div className="notice">Key present: {diag.brevoKeyPresent ? `yes (${diag.brevoKeyLength} chars)` : 'no'}. Sender: {diag.sender || 'not set'}. Reachability: {diag.probe.ok ? `Brevo answers (HTTP ${diag.probe.status}, ${diag.probe.note})` : `unreachable: ${diag.probe.note}`}{diag.error ? ` Error: ${diag.error}` : ''}</div> : null}
     <table className="grid"><thead><tr><th>When</th><th>To</th><th>Subject</th><th>Status</th><th>Detail</th></tr></thead><tbody>
       {((logs && logs.emails) || []).map((e) => <tr key={e.email_id}><td>{e.sent_at}</td><td>{e.email_address}</td><td>{e.subject}</td><td><span className="tag">{e.status}</span></td><td>{e.response}</td></tr>)}</tbody></table>
     <h2>Text delivery.</h2>

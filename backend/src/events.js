@@ -62,12 +62,12 @@ function getTransport() {
 async function sendEmail(address, subject, message) {
   // HTTP providers first: they use port 443, which free hosts never block,
   // unlike outbound SMTP (port 587), which many free tiers block entirely.
-  if (process.env.BREVO_API_KEY) {
+  if (String(process.env.BREVO_API_KEY || '').trim()) {
     try {
       const id = await sendViaBrevo(address, subject, message);
       return { status: 'SENT', detail: `brevo=${id}` };
     } catch (e) {
-      return { status: 'FAILED', detail: e.message };
+      return { status: 'FAILED', detail: withCause(e) };
     }
   }
   const tx = getTransport();
@@ -83,11 +83,19 @@ async function sendEmail(address, subject, message) {
   }
 }
 
+// undici's bare "fetch failed" hides the real reason one level down.
+function withCause(e) {
+  const c = e && e.cause ? (e.cause.message || String(e.cause)) : null;
+  return c ? `${e.message} (cause: ${c})` : String((e && e.message) || e);
+}
+
 // Brevo transactional HTTP API (free 300/day). Verify one sender address
 // (even a Gmail) in the Brevo dashboard, create an API key, and set
 // BREVO_API_KEY plus BREVO_SENDER. No domain or SMTP ports needed.
 async function sendViaBrevo(address, subject, message) {
-  let sender = process.env.BREVO_SENDER || '';
+  const key = String(process.env.BREVO_API_KEY || '').trim();
+  if (!key) throw new Error('BREVO_API_KEY is blank');
+  let sender = String(process.env.BREVO_SENDER || '').trim();
   if (!sender && process.env.SMTP_FROM) {
     const m = String(process.env.SMTP_FROM).match(/<(.*)>/);
     sender = m ? m[1] : process.env.SMTP_FROM;
@@ -95,7 +103,7 @@ async function sendViaBrevo(address, subject, message) {
   if (!sender) throw new Error('BREVO_SENDER is not set (verify a sender in Brevo first)');
   const r = await fetch('https://api.smtp.brevo.com/v3/smtp/email', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'api-key': process.env.BREVO_API_KEY },
+    headers: { 'Content-Type': 'application/json', 'api-key': key },
     body: JSON.stringify({
       sender: { email: sender, name: 'Rent Ledger' },
       to: [{ email: address }],
@@ -171,4 +179,16 @@ async function dispatch({ eventCode, tenantId = null, userId = null, vars = {} }
   return results;
 }
 
-module.exports = { dispatch, smsProviders, whatsappProviders };
+// Raw reachability probe: proves TCP plus TLS plus HTTP to Brevo work,
+// independent of any key. Returns { ok, status } for the diagnostics UI.
+async function probeBrevo() {
+  try {
+    const r = await fetch('https://api.smtp.brevo.com/v3/account', { method: 'GET' });
+    await r.text().catch(() => '');
+    return { ok: true, status: r.status, note: r.status === 401 ? 'reachable, needs a valid key' : 'reachable' };
+  } catch (e) {
+    return { ok: false, status: null, note: withCause(e) };
+  }
+}
+
+module.exports = { dispatch, smsProviders, whatsappProviders, probeBrevo };
