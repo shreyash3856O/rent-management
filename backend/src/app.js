@@ -173,14 +173,20 @@ function crud(table, pk, moduleName, opts = {}) {
     } catch (e) { res.status(400).json({ error: e.message }); }
   });
   r.delete('/:id', auth(), requirePerm(moduleName, 'delete'), async (req, res) => {
-    const old = await db.prepare(`SELECT * FROM ${table} WHERE ${pk} = ?`).get(req.params.id);
-    if (!old) return res.status(404).json({ error: 'Not found' });
-    // Explicit confirmation is enforced client-side; server requires confirm=true.
-    if (req.query.confirm !== 'true' && (req.body || {}).confirm !== true)
-      return res.status(400).json({ error: 'Confirmation required: resend with confirm=true' });
-    await db.prepare(`DELETE FROM ${table} WHERE ${pk} = ?`).run(req.params.id);
-    audit(req.auth.userId, moduleName, 'DELETE', table, req.params.id, old, null, req);
-    res.json({ deleted: true });
+    try {
+      const old = await db.prepare(`SELECT * FROM ${table} WHERE ${pk} = ?`).get(req.params.id);
+      if (!old) return res.status(404).json({ error: 'Not found' });
+      // Explicit confirmation is enforced client-side; server requires confirm=true.
+      if (req.query.confirm !== 'true' && (req.body || {}).confirm !== true)
+        return res.status(400).json({ error: 'Confirmation required: resend with confirm=true' });
+      await db.prepare(`DELETE FROM ${table} WHERE ${pk} = ?`).run(req.params.id);
+      audit(req.auth.userId, moduleName, 'DELETE', table, req.params.id, old, null, req);
+      res.json({ deleted: true });
+    } catch (e) {
+      if (/foreign key/i.test(e.message))
+        return res.status(409).json({ error: 'Cannot delete: other records still link to this one. Remove or reassign them first.' });
+      res.status(400).json({ error: e.message });
+    }
   });
   return r;
 }
@@ -506,6 +512,15 @@ cron.schedule('0 1 1 * *', async () => {
 cron.schedule('0 2 * * *', async () => {
   try { console.log('[CRON] overdue marking', await svc.markOverdueInvoices()); }
   catch (e) { console.error('[CRON] overdue failed', e.message); }
+});
+
+// Last-resort guards: no single request may ever take the process down.
+// (Express 4 does not forward async errors by itself.)
+process.on('unhandledRejection', (e) => console.error('[guard] unhandled rejection, server stays up:', e && e.message));
+process.on('uncaughtException', (e) => console.error('[guard] uncaught exception, server stays up:', e && e.message));
+app.use((err, req, res, next) => {
+  console.error('[api] error:', err && err.message);
+  res.status(500).json({ error: 'Internal error' });
 });
 
 // Serve frontend build if present

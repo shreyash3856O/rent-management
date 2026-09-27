@@ -74,4 +74,9 @@ const buf = Buffer.from(await dl.arrayBuffer());
 ok(dl.ok && buf.equals(Buffer.from([137, 80, 78, 71, 1, 2, 3])), 'blob download bytes match');
 const noAuth = await fetch(B + up.file_path);
 ok(noAuth.status === 401, 'file download requires login');
+// deleting a tenant with live agreements must 409, not crash the server
+const delRes = await fetch(B + '/api/tenants/1?confirm=true', { method: 'DELETE', headers: { Authorization: 'Bearer ' + T } });
+ok(delRes.status === 409, 'delete of referenced tenant refused with 409');
+const stillUp = await call('GET', '/api/health');
+ok(stillUp.ok === true, 'server still up after refused delete');
 console.log('E2E done.');
