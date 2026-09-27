@@ -348,7 +348,34 @@ app.get('/api/invoices/:id', auth(), requirePerm('RENT', 'view'), async (req, re
     p.attachments = await db.prepare(`SELECT document_id, file_name, file_path FROM documents WHERE entity_type = 'payment' AND entity_id = ?`).all(p.payment_id);
   }
   inv.receipts = await db.prepare(`SELECT r.* FROM receipts r JOIN payments p ON p.payment_id = r.payment_id WHERE p.invoice_id = ?`).all(req.params.id);
+  // Where the numbers came from: agreement terms plus the linked rent plan.
+  const agr = await db.prepare(`SELECT * FROM rental_agreements WHERE agreement_id = ?`).get(inv.agreement_id);
+  const plan = agr && agr.rent_plan_id ? await db.prepare(`SELECT * FROM rent_plans WHERE rent_plan_id = ?`).get(agr.rent_plan_id) : null;
+  inv.source = agr ? {
+    agreement_number: agr.agreement_number, monthly_rent: agr.monthly_rent,
+    other_charges: agr.other_charges, due_day: agr.due_day,
+    plan: plan ? { plan_name: plan.plan_name, maintenance_charge: plan.maintenance_charge, water_charge: plan.water_charge } : null,
+  } : null;
   res.json(inv);
+});
+// Rebuild an UNPAID pending invoice from current agreement and plan values.
+// Invoices with recorded payments are locked history and cannot be rebuilt.
+app.post('/api/invoices/:id/regenerate', auth(), requirePerm('RENT', 'add'), async (req, res) => {
+  const inv = await db.prepare(`SELECT * FROM rent_invoices WHERE invoice_id = ?`).get(req.params.id);
+  if (!inv) return res.status(404).json({ error: 'Not found' });
+  if (inv.status !== 'PENDING' || Number(inv.paid_amount) > 0)
+    return res.status(400).json({ error: 'Only unpaid pending invoices can be rebuilt. Recorded payments lock an invoice.' });
+  if ((req.body || {}).confirm !== true) return res.status(400).json({ error: 'Rebuilding discards these line items. Resend with confirm=true.' });
+  try {
+    const wipe = db.transaction(async (tdb) => {
+      await tdb.prepare(`DELETE FROM invoice_items WHERE invoice_id = ?`).run(req.params.id);
+      await tdb.prepare(`DELETE FROM rent_invoices WHERE invoice_id = ?`).run(req.params.id);
+    });
+    await wipe();
+    const out = await svc.generateRentInvoice(inv.agreement_id, inv.invoice_month);
+    audit(req.auth.userId, 'RENT', 'REGENERATE', 'rent_invoices', out.invoiceId, inv, out, req);
+    res.json(out);
+  } catch (e) { res.status(400).json({ error: e.message }); }
 });
 app.post('/api/jobs/generate-rent', auth(), requirePerm('RENT', 'add'), async (req, res) => {
   const { month } = req.body || {};

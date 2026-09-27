@@ -99,7 +99,7 @@ per channel log tables, so delivery is auditable either way.
   blobs), downloaded back through `GET /files/:id` (login required, JWT as
   `?token=` for plain links)
 - CRUD: `/api/properties`, `/api/buildings`, `/api/floors`, `/api/units`, `/api/beds`, `/api/tenants`, `/api/rent-plans`, plus `/api/agreements` (occupancy transitions, terminate needs `confirm=true`).
-- Billing: `POST /api/jobs/generate-rent {month}`, `POST /api/jobs/mark-overdue`, `POST /api/payments {invoice_id, amount, payment_mode, attachment_paths, confirm:true}` (amounts over the outstanding balance are rejected; proof images appear in invoice detail), `GET /api/invoices/:id`, `GET /api/receipts`, `GET /api/statements/:tenantId`.
+- Billing: `POST /api/jobs/generate-rent {month}`, `POST /api/jobs/mark-overdue`, `POST /api/payments {invoice_id, amount, payment_mode, attachment_paths, confirm:true}` (amounts over the outstanding balance are rejected; proof images appear in invoice detail), `GET /api/invoices/:id` (with line items, payments, receipts, and the agreement plus plan source behind every number), `POST /api/invoices/:id/regenerate` (rebuilds an unpaid pending invoice from current terms), `GET /api/receipts`, `GET /api/statements/:tenantId`.
 - Ops: `/api/complaints` (with photo attachments in `documents`, `GET /api/complaints/:id` for files), `/api/notifications`, `/api/dashboard/summary`, `/api/audit-logs`, tenant self service under `/api/tenant/*` (including `/api/tenant/statement` ledger and `/api/tenant/receipts/:id`).
 - Receipts: `/api/receipts/:id` renders a printable receipt (Print or save PDF from the browser) with org, property, invoice, payment, and totals.
 

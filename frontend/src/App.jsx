@@ -74,7 +74,7 @@ function logout(nav) { localStorage.removeItem('prm_token'); localStorage.remove
 function AdminLayout() {
   const nav = useNavigate();
   const loc = useLocation();
-  const items = [['/admin', 'Dashboard'], ['/admin/hierarchy', 'Properties'], ['/admin/tenants', 'Tenants'], ['/admin/agreements', 'Agreements'], ['/admin/invoices', 'Invoices'], ['/admin/payments', 'Payments'], ['/admin/complaints', 'Complaints'], ['/admin/audit', 'Audit log']];
+  const items = [['/admin', 'Dashboard'], ['/admin/hierarchy', 'Properties'], ['/admin/tenants', 'Tenants'], ['/admin/agreements', 'Agreements'], ['/admin/plans', 'Rent plans'], ['/admin/invoices', 'Invoices'], ['/admin/payments', 'Payments'], ['/admin/complaints', 'Complaints'], ['/admin/audit', 'Audit log']];
   return (<div><div className="topbar"><span className="brand">Rent Ledger. Admin.</span>
     <span className="actions"><span className="sub">Signed in</span> <button onClick={() => { if (window.confirm('Sign out now?')) logout(nav); }}>Sign out</button></span></div>
     <div className="layout"><nav className="sidenav">{items.map(([p, l]) => <NavLink key={p} to={p} end={p === '/admin'} className={({ isActive }) => isActive ? 'active' : ''}>{l}</NavLink>)}</nav>
@@ -83,6 +83,7 @@ function AdminLayout() {
         <Route path="hierarchy" element={<Hierarchy />} />
         <Route path="tenants" element={<Tenants />} />
         <Route path="agreements" element={<Agreements />} />
+        <Route path="plans" element={<RentPlans />} />
         <Route path="invoices" element={<Invoices />} />
         <Route path="payments" element={<Payments />} />
         <Route path="complaints" element={<AdminComplaints />} />
@@ -273,28 +274,136 @@ function Tenants() {
       })}</tbody></table>
   </div>);
 }
+function RentPlans() {
+  const [list, , load] = useFetch('/api/rent-plans');
+  const [props] = useFetch('/api/properties');
+  const [f, setF] = useState({ property_id: '', plan_name: '', base_rent: '', maintenance_charge: '0', water_charge: '0', other_charges: '0', security_deposit: '', late_fee: '0', due_day: '5' });
+  const [editing, setEditing] = useState(null);
+  const [err, setErr] = useState(null);
+  const [note, setNote] = useState(null);
+  const set = (k, v) => setF({ ...f, [k]: v });
+  const setE = (k, v) => setEditing({ ...editing, [k]: v });
+  const num = (v, d = 0) => (v === '' || v == null ? d : Number(v));
+  const save = async (isEdit) => {
+    try {
+      const src = isEdit ? editing : f;
+      if (!src.property_id || !src.plan_name) { setErr('Property and plan name are required.'); return; }
+      const body = {
+        property_id: Number(src.property_id), plan_name: src.plan_name, base_rent: num(src.base_rent),
+        maintenance_charge: num(src.maintenance_charge), water_charge: num(src.water_charge),
+        electricity_mode: src.electricity_mode || 'ACTUAL', electricity_charge: num(src.electricity_charge),
+        other_charges: num(src.other_charges), security_deposit: num(src.security_deposit),
+        late_fee: num(src.late_fee), due_day: Math.min(Math.max(num(src.due_day, 5), 1), 28),
+        status: src.status || 'ACTIVE',
+      };
+      await withBusy(isEdit ? 'Saving plan.' : 'Creating plan.', async () => {
+        if (isEdit) await api.put(`/api/rent-plans/${editing.rent_plan_id}`, body);
+        else await api.post('/api/rent-plans', body);
+      });
+      setEditing(null); setErr(null); setNote(isEdit ? 'Plan saved. Future invoices use the new charges.' : 'Plan created.');
+      setF({ property_id: '', plan_name: '', base_rent: '', maintenance_charge: '0', water_charge: '0', other_charges: '0', security_deposit: '', late_fee: '0', due_day: '5' });
+      load();
+    } catch (e) { setErr(e.message); }
+  };
+  const remove = async (p) => {
+    if (!window.confirm(`Delete plan ${p.plan_name}? Agreements using it block deletion.`)) return;
+    try {
+      await withBusy('Deleting plan.', async () => { await api.del(`/api/rent-plans/${p.rent_plan_id}`, true); });
+      setErr(null); setNote('Plan deleted.'); load();
+    } catch (e) { setErr(e.message); }
+  };
+  return (<div><h1>Rent plans.</h1><p className="sub">A plan sets the maintenance and water charges every invoice copies. Rent itself comes from the agreement. Changes apply to future invoices, never to ones already sent.</p>
+    {err ? <div className="field-err">{err}</div> : null}
+    {note ? <div className="notice">{note}</div> : null}
+    <div className="form-grid">
+      <Field label="Property"><select value={f.property_id} onChange={(e) => set('property_id', e.target.value)}><option value="">Select</option>{(props || []).map((p) => <option key={p.property_id} value={p.property_id}>{p.property_name}</option>)}</select></Field>
+      <Field label="Plan name" error={need(f.plan_name)}><input value={f.plan_name} onChange={(e) => set('plan_name', e.target.value)} /></Field>
+      <Field label="Base rent (reference)"><input value={f.base_rent} onChange={(e) => set('base_rent', e.target.value)} /></Field>
+      <Field label="Maintenance"><input value={f.maintenance_charge} onChange={(e) => set('maintenance_charge', e.target.value)} /></Field>
+      <Field label="Water"><input value={f.water_charge} onChange={(e) => set('water_charge', e.target.value)} /></Field>
+      <Field label="Other charges"><input value={f.other_charges} onChange={(e) => set('other_charges', e.target.value)} /></Field>
+      <Field label="Security deposit"><input value={f.security_deposit} onChange={(e) => set('security_deposit', e.target.value)} /></Field>
+      <Field label="Late fee"><input value={f.late_fee} onChange={(e) => set('late_fee', e.target.value)} /></Field>
+      <Field label="Due day (1 to 28)"><input value={f.due_day} onChange={(e) => set('due_day', e.target.value)} /></Field></div>
+    <p><button className="primary" onClick={() => save(false)}>Create plan</button></p>
+    {editing ? <div><h2>Editing {editing.plan_name}.</h2>
+      <div className="form-grid">
+        <Field label="Plan name"><input value={editing.plan_name || ''} onChange={(e) => setE('plan_name', e.target.value)} /></Field>
+        <Field label="Base rent (reference)"><input value={editing.base_rent ?? ''} onChange={(e) => setE('base_rent', e.target.value)} /></Field>
+        <Field label="Maintenance"><input value={editing.maintenance_charge ?? ''} onChange={(e) => setE('maintenance_charge', e.target.value)} /></Field>
+        <Field label="Water"><input value={editing.water_charge ?? ''} onChange={(e) => setE('water_charge', e.target.value)} /></Field>
+        <Field label="Other charges"><input value={editing.other_charges ?? ''} onChange={(e) => setE('other_charges', e.target.value)} /></Field>
+        <Field label="Security deposit"><input value={editing.security_deposit ?? ''} onChange={(e) => setE('security_deposit', e.target.value)} /></Field>
+        <Field label="Late fee"><input value={editing.late_fee ?? ''} onChange={(e) => setE('late_fee', e.target.value)} /></Field>
+        <Field label="Due day (1 to 28)"><input value={editing.due_day ?? ''} onChange={(e) => setE('due_day', e.target.value)} /></Field>
+        <Field label="Status"><select value={editing.status || 'ACTIVE'} onChange={(e) => setE('status', e.target.value)}><option>ACTIVE</option><option>INACTIVE</option></select></Field></div>
+      <p><button className="primary" onClick={() => save(true)}>Save changes</button> <button onClick={() => setEditing(null)}>Cancel</button></p></div> : null}
+    <table className="grid"><thead><tr><th>Plan</th><th>Maintenance</th><th>Water</th><th>Other</th><th>Due day</th><th>Status</th><th>Action</th></tr></thead><tbody>
+      {(list || []).map((p) => <tr key={p.rent_plan_id}><td>{p.plan_name}</td><td>{money(p.maintenance_charge)}</td><td>{money(p.water_charge)}</td><td>{money(p.other_charges)}</td><td>{p.due_day}</td><td><span className="tag">{p.status}</span></td>
+        <td className="row-actions"><button onClick={() => { setEditing({ ...p }); setNote(null); setErr(null); }}>Edit</button><button onClick={() => remove(p)}>Delete</button></td></tr>)}</tbody></table>
+  </div>);
+}
 function Agreements() {
   const [list, , load] = useFetch('/api/agreements');
   const [tenants] = useFetch('/api/tenants');
   const [props] = useFetch('/api/properties');
-  const [f, setF] = useState({ tenant_id: '', property_id: '', agreement_number: '', start_date: '', monthly_rent: '', status: 'ACTIVE' });
+  const [plans] = useFetch('/api/rent-plans');
+  const [f, setF] = useState({ tenant_id: '', property_id: '', agreement_number: '', start_date: '', monthly_rent: '', rent_plan_id: '', other_charges: '', due_day: '5', security_deposit: '', status: 'ACTIVE' });
+  const [editing, setEditing] = useState(null);
   const [err, setErr] = useState(null);
+  const [note, setNote] = useState(null);
   const set = (k, v) => setF({ ...f, [k]: v });
-  return (<div><h1>Rental agreements.</h1><p className="sub">Activating marks the linked bed or room Occupied. Terminating releases it.</p>
+  const setE = (k, v) => setEditing({ ...editing, [k]: v });
+  const num = (v, d = 0) => (v === '' || v == null ? d : Number(v));
+  return (<div><h1>Rental agreements.</h1><p className="sub">Activating marks the linked bed or room Occupied. Terminating releases it. Rent and charges feed every future invoice.</p>
     <div className="form-grid">
       <Field label="Tenant"><select value={f.tenant_id} onChange={(e) => set('tenant_id', e.target.value)}><option value="">Select</option>{(tenants || []).map((t) => <option key={t.tenant_id} value={t.tenant_id}>{t.full_name}</option>)}</select></Field>
       <Field label="Property"><select value={f.property_id} onChange={(e) => set('property_id', e.target.value)}><option value="">Select</option>{(props || []).map((p) => <option key={p.property_id} value={p.property_id}>{p.property_name}</option>)}</select></Field>
       <Field label="Agreement no" error={need(f.agreement_number)}><input value={f.agreement_number} onChange={(e) => set('agreement_number', e.target.value)} /></Field>
       <Field label="Start date" error={need(f.start_date)}><input type="date" value={f.start_date} onChange={(e) => set('start_date', e.target.value)} /></Field>
       <Field label="Monthly rent" error={need(f.monthly_rent)}><input value={f.monthly_rent} onChange={(e) => set('monthly_rent', e.target.value)} /></Field>
+      <Field label="Rent plan (sets maintenance and water)"><select value={f.rent_plan_id} onChange={(e) => set('rent_plan_id', e.target.value)}><option value="">None</option>{(plans || []).map((p) => <option key={p.rent_plan_id} value={p.rent_plan_id}>{p.plan_name}</option>)}</select></Field>
+      <Field label="Other monthly charges"><input value={f.other_charges} onChange={(e) => set('other_charges', e.target.value)} /></Field>
+      <Field label="Due day (1 to 28)"><input value={f.due_day} onChange={(e) => set('due_day', e.target.value)} /></Field>
+      <Field label="Security deposit"><input value={f.security_deposit} onChange={(e) => set('security_deposit', e.target.value)} /></Field>
       <Field label="Status"><select value={f.status} onChange={(e) => set('status', e.target.value)}><option>DRAFT</option><option>PENDING_SIGNATURE</option><option>ACTIVE</option></select></Field></div>
     {err ? <div className="field-err">{err}</div> : null}
+    {note ? <div className="notice">{note}</div> : null}
     <p><button className="primary" onClick={async () => {
-      try { await withBusy('Creating agreement.', async () => api.post('/api/agreements', { ...f, tenant_id: Number(f.tenant_id), property_id: Number(f.property_id), monthly_rent: Number(f.monthly_rent) })); setErr(null); load(); } catch (e) { setErr(e.message); }
+      try {
+        await withBusy('Creating agreement.', async () => api.post('/api/agreements', {
+          ...f, tenant_id: Number(f.tenant_id), property_id: Number(f.property_id), monthly_rent: Number(f.monthly_rent),
+          rent_plan_id: f.rent_plan_id ? Number(f.rent_plan_id) : null, other_charges: num(f.other_charges),
+          due_day: Math.min(Math.max(num(f.due_day, 5), 1), 28), security_deposit: num(f.security_deposit),
+        }));
+        setErr(null); setNote('Agreement created.');
+        setF({ tenant_id: '', property_id: '', agreement_number: '', start_date: '', monthly_rent: '', rent_plan_id: '', other_charges: '', due_day: '5', security_deposit: '', status: 'ACTIVE' });
+        load();
+      } catch (e) { setErr(e.message); }
     }}>Create agreement</button></p>
+    {editing ? <div><h2>Editing {editing.agreement_number}.</h2>
+      <div className="form-grid">
+        <Field label="Monthly rent"><input value={editing.monthly_rent ?? ''} onChange={(e) => setE('monthly_rent', e.target.value)} /></Field>
+        <Field label="Rent plan"><select value={editing.rent_plan_id || ''} onChange={(e) => setE('rent_plan_id', e.target.value)}><option value="">None</option>{(plans || []).map((p) => <option key={p.rent_plan_id} value={p.rent_plan_id}>{p.plan_name}</option>)}</select></Field>
+        <Field label="Other monthly charges"><input value={editing.other_charges ?? ''} onChange={(e) => setE('other_charges', e.target.value)} /></Field>
+        <Field label="Due day (1 to 28)"><input value={editing.due_day ?? ''} onChange={(e) => setE('due_day', e.target.value)} /></Field>
+        <Field label="Security deposit"><input value={editing.security_deposit ?? ''} onChange={(e) => setE('security_deposit', e.target.value)} /></Field>
+        <Field label="Late fee"><input value={editing.late_fee ?? ''} onChange={(e) => setE('late_fee', e.target.value)} /></Field>
+        <Field label="Notice period (days)"><input value={editing.notice_period_days ?? ''} onChange={(e) => setE('notice_period_days', e.target.value)} /></Field></div>
+      <p><button className="primary" onClick={async () => {
+        try {
+          await withBusy('Saving agreement.', async () => api.put(`/api/agreements/${editing.agreement_id}`, {
+            monthly_rent: Number(editing.monthly_rent), rent_plan_id: editing.rent_plan_id ? Number(editing.rent_plan_id) : null,
+            other_charges: num(editing.other_charges), due_day: Math.min(Math.max(num(editing.due_day, 5), 1), 28),
+            security_deposit: num(editing.security_deposit), late_fee: num(editing.late_fee),
+            notice_period_days: num(editing.notice_period_days, 30),
+          }));
+          setEditing(null); setErr(null); setNote('Agreement saved. Future invoices use the new terms.'); load();
+        } catch (e) { setErr(e.message); }
+      }}>Save changes</button> <button onClick={() => setEditing(null)}>Cancel</button></p></div> : null}
     <table className="grid"><thead><tr><th>No</th><th>Tenant</th><th>Rent</th><th>Status</th><th>Action</th></tr></thead><tbody>
       {(list || []).map((a) => <tr key={a.agreement_id}><td>{a.agreement_number}</td><td>{a.tenant_name}</td><td>{money(a.monthly_rent)}</td><td><span className="tag">{a.status}</span></td>
-        <td className="row-actions">{a.status === 'ACTIVE' ? <button onClick={async () => { if (window.confirm(`Terminate agreement ${a.agreement_number}? The room or bed returns to Available.`)) { await withBusy('Terminating agreement.', async () => api.put(`/api/agreements/${a.agreement_id}`, { status: 'TERMINATED', confirm: true })); load(); } }}>Terminate</button> : <button onClick={async () => { await withBusy('Activating agreement.', async () => api.put(`/api/agreements/${a.agreement_id}`, { status: 'ACTIVE' })); load(); }}>Activate</button>}</td></tr>)}</tbody></table>
+        <td className="row-actions"><button onClick={() => { setEditing({ ...a }); setNote(null); setErr(null); }}>Edit terms</button>{a.status === 'ACTIVE' ? <button onClick={async () => { if (window.confirm(`Terminate agreement ${a.agreement_number}? The room or bed returns to Available.`)) { await withBusy('Terminating agreement.', async () => api.put(`/api/agreements/${a.agreement_id}`, { status: 'TERMINATED', confirm: true })); load(); } }}>Terminate</button> : <button onClick={async () => { await withBusy('Activating agreement.', async () => api.put(`/api/agreements/${a.agreement_id}`, { status: 'ACTIVE' })); load(); }}>Activate</button>}</td></tr>)}</tbody></table>
   </div>);
 }
 function Invoices() {
@@ -343,6 +452,15 @@ function Invoices() {
     <table className="grid"><thead><tr><th>Number</th><th>Tenant</th><th>Month</th><th>Due</th><th>Total</th><th>Paid</th><th>Due bal</th><th>Status</th><th>Detail</th></tr></thead><tbody>
       {(list || []).map((i) => <tr key={i.invoice_id}><td>{i.invoice_number}</td><td>{i.tenant_name}</td><td>{fmtDate(i.invoice_month)}</td><td>{fmtDate(i.due_date)}</td><td>{money(i.total_amount)}</td><td>{money(i.paid_amount)}</td><td>{money(i.outstanding_amount)}</td><td>{i.status === 'OVERDUE' ? <span className="tag overdue">OVERDUE</span> : <span className="tag">{i.status}</span>}</td><td><button onClick={() => openDetail(i.invoice_id)}>{sel === i.invoice_id ? 'Hide' : 'View'}</button></td></tr>)}</tbody></table>
     {detail ? <div><h2>Invoice {detail.invoice_number}: line items, payments, receipts.</h2>
+      {detail.source ? <p className="sub">Built from agreement {detail.source.agreement_number} (rent {money(detail.source.monthly_rent)}{Number(detail.source.other_charges) > 0 ? `, other ${money(detail.source.other_charges)}` : ''}{detail.source.plan ? `, plan ${detail.source.plan.plan_name} with maintenance ${money(detail.source.plan.maintenance_charge)} and water ${money(detail.source.plan.water_charge)}` : ', no rent plan linked'}). Edit the agreement or plan, then rebuild this invoice while it is still unpaid.</p>
+        : <p className="sub">Source agreement not found.</p>}
+      {detail.status === 'PENDING' && Number(detail.paid_amount) === 0 ? <p><button onClick={async () => {
+        if (!window.confirm(`Rebuild ${detail.invoice_number} from current agreement and plan values? The current line items are discarded.`)) return;
+        try {
+          await withBusy('Rebuilding invoice.', async () => api.post(`/api/invoices/${detail.invoice_id}/regenerate`, { confirm: true }));
+          setMsg('Invoice rebuilt from current values.'); setDetail(null); setSel(null); load();
+        } catch (e) { setMsg(e.message); }
+      }}>Rebuild from current values</button></p> : null}
       <table className="grid"><thead><tr><th>Item</th><th>Description</th><th>Qty</th><th>Rate</th><th>Amount</th></tr></thead><tbody>
         {(detail.items || []).map((it) => <tr key={it.invoice_item_id}><td>{it.item_type}</td><td>{it.description}</td><td>{it.quantity}</td><td>{money(it.rate)}</td><td>{money(it.amount)}</td></tr>)}</tbody></table>
       <table className="grid"><thead><tr><th>Payment</th><th>Amount</th><th>Mode</th><th>Status</th><th>Proof</th><th>Receipt</th></tr></thead><tbody>

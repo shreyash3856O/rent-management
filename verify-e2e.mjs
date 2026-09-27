@@ -102,4 +102,14 @@ ok(gone.status === 404, 'deleted tenant is gone');
 // tenant sees own complaints now
 const tcomp = await call('GET', '/api/complaints', null, TT);
 ok(tcomp.length >= 1 && tcomp.every((c) => c.tenant_id === 1), 'tenant lists own complaints');
+// plan edit flows into rebuilt pending invoices
+await call('POST', '/api/jobs/generate-rent', { month: '2026-10-01' }, T);
+const oct = (await call('GET', '/api/invoices', null, T)).find((i) => i.tenant_id === 1 && String(i.invoice_month).startsWith('2026-10'));
+ok(oct && oct.status === 'PENDING', 'october invoice pending');
+await call('PUT', '/api/rent-plans/1', { maintenance_charge: 1500 }, T);
+const re = await call('POST', `/api/invoices/${oct.invoice_id}/regenerate`, { confirm: true }, T);
+ok(!!re.invoiceId, 'pending invoice rebuilt');
+const oct2 = await call('GET', `/api/invoices/${re.invoiceId}`, null, T);
+ok(oct2.maintenance === 1500 && oct2.total_amount === 16800, `rebuilt total ${oct2.total_amount}`);
+ok(oct2.source && oct2.source.plan && oct2.source.plan.plan_name === 'Standard PG Plan', 'invoice shows its source');
 console.log('E2E done.');
