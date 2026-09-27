@@ -44,7 +44,9 @@ function AdminLogin() {
   const [email, setEmail] = useState('admin@abcproperty.com');
   const [password, setPassword] = useState('admin123');
   const [err, setErr] = useState(null);
-  return (<div className="login-wrap">
+  return (<div className="login-screen">
+    <video className="bg" src="/vid1.mp4" autoPlay muted loop playsInline preload="auto" />
+    <div className="login-wrap">
     <h1>Rent Ledger. Admin sign in.</h1>
     <p className="sub">Use email and password. Demo account is prefilled.</p>
     <Field label="Email" error={need(email)}><input value={email} onChange={(e) => setEmail(e.target.value)} /></Field>
@@ -54,7 +56,7 @@ function AdminLogin() {
       try { const r = await withBusy('Signing in.', async () => api.post('/api/auth/login', { email, password })); localStorage.setItem('prm_token', r.token); localStorage.setItem('prm_role', 'staff'); nav('/admin'); }
       catch (e) { setErr(e.message); }
     }}>Sign in</button> <Link className="btn" to="/tenant/login">Tenant sign in</Link></p>
-  </div>);
+  </div></div>);
 }
 function TenantLogin() {
   const nav = useNavigate();
@@ -62,7 +64,9 @@ function TenantLogin() {
   const [otp, setOtp] = useState('');
   const [sent, setSent] = useState(null);
   const [err, setErr] = useState(null);
-  return (<div className="login-wrap">
+  return (<div className="login-screen">
+    <video className="bg" src="/vid1.mp4" autoPlay muted loop playsInline preload="auto" />
+    <div className="login-wrap">
     <h1>Rent Ledger. Tenant sign in.</h1>
     <p className="sub">Step 1, request OTP. Step 2, enter OTP. While no SMS vendor is connected, the demo code is 8520.</p>
     <Field label="Mobile" error={mobileErr(mobile)}><input inputMode="numeric" maxLength={10} value={mobile} onChange={(e) => setMobile(e.target.value.replace(/\D/g, '').slice(0, 10))} /></Field>
@@ -74,7 +78,7 @@ function TenantLogin() {
       try { const r = await withBusy('Verifying OTP.', async () => api.post('/api/auth/tenant/verify-otp', { mobile, otp })); localStorage.setItem('prm_token', r.token); localStorage.setItem('prm_role', 'tenant'); nav('/tenant'); }
       catch (e) { setErr(e.message); }
     }}>Verify and sign in</button> <Link className="btn" to="/login">Admin sign in</Link></p>
-  </div>);
+  </div></div>);
 }
 function logout(nav) { localStorage.removeItem('prm_token'); localStorage.removeItem('prm_role'); nav('/login'); }
 
