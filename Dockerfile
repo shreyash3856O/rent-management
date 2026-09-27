@@ -9,6 +9,9 @@ COPY frontend/ ./
 RUN npm run build
 
 FROM node:22-slim
+# ca-certificates is required: without it the Turso TLS sync fails on boot
+# with "no valid native root CA certificates found".
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates && rm -rf /var/lib/apt/lists/*
 WORKDIR /app/backend
 COPY backend/package*.json ./
 RUN npm ci --omit=dev
