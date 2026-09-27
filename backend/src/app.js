@@ -519,6 +519,17 @@ app.get('/api/notifications', auth(), async (req, res) => {
 app.get('/api/audit-logs', auth(), requirePerm('REPORTS', 'view'), async (req, res) => {
   res.json(await db.prepare(`SELECT * FROM audit_logs ORDER BY audit_id DESC LIMIT 300`).all());
 });
+// Delivery log: every email/SMS attempt with provider status and detail,
+// so a missing mail can be diagnosed from the UI instead of server logs.
+app.get('/api/message-logs', auth(), requirePerm('REPORTS', 'view'), async (req, res) => {
+  const emails = await db.prepare(`SELECT e.email_id, e.email_address, e.subject, e.status, e.response, e.sent_at, n.event_code, n.tenant_id
+    FROM email_logs e LEFT JOIN notifications n ON n.notification_id = e.notification_id
+    ORDER BY e.email_id DESC LIMIT 200`).all();
+  const sms = await db.prepare(`SELECT s.sms_id, s.mobile, s.status, s.response, s.sent_at, n.event_code
+    FROM sms_logs s LEFT JOIN notifications n ON n.notification_id = s.notification_id
+    ORDER BY s.sms_id DESC LIMIT 200`).all();
+  res.json({ emails, sms });
+});
 app.get('/api/permissions/me', auth(), async (req, res) => {
   if (req.auth.kind === 'tenant') return res.json({ role: 'TENANT', permissions: [] });
   const rows = await db.prepare(`SELECT p.module_name, p.permission_name, rp.can_view, rp.can_add, rp.can_edit, rp.can_delete, rp.can_approve

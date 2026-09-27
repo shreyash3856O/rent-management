@@ -531,9 +531,16 @@ function AdminComplaints() {
 }
 function Audit() {
   const [list] = useFetch('/api/audit-logs');
+  const [logs] = useFetch('/api/message-logs');
   return (<div><h1>Audit log.</h1><p className="sub">Every financial or tenant data change is recorded with user, action and timestamp.</p>
     <table className="grid"><thead><tr><th>When</th><th>User</th><th>Module</th><th>Action</th><th>Entity</th></tr></thead><tbody>
       {(list || []).map((a) => <tr key={a.audit_id}><td>{a.created_at}</td><td>{a.user_id}</td><td>{a.module_name}</td><td>{a.action}</td><td>{a.entity_type} {a.entity_id}</td></tr>)}</tbody></table>
+    <h2>Mail delivery.</h2><p className="sub">SENT reached the mailbox. PENDING means mail is not configured (set SMTP on the server). FAILED carries the provider reason.</p>
+    <table className="grid"><thead><tr><th>When</th><th>To</th><th>Subject</th><th>Status</th><th>Detail</th></tr></thead><tbody>
+      {((logs && logs.emails) || []).map((e) => <tr key={e.email_id}><td>{e.sent_at}</td><td>{e.email_address}</td><td>{e.subject}</td><td><span className="tag">{e.status}</span></td><td>{e.response}</td></tr>)}</tbody></table>
+    <h2>Text delivery.</h2>
+    <table className="grid"><thead><tr><th>When</th><th>To</th><th>Status</th><th>Detail</th></tr></thead><tbody>
+      {((logs && logs.sms) || []).map((s) => <tr key={s.sms_id}><td>{s.sent_at}</td><td>{s.mobile}</td><td><span className="tag">{s.status}</span></td><td>{s.response}</td></tr>)}</tbody></table>
   </div>);
 }
 
