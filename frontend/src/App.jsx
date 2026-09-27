@@ -371,6 +371,7 @@ function Agreements() {
     {(listErr || tenantsErr || propsErr || plansErr) ? <div className="field-err">Lists failed to load ({listErr || tenantsErr || propsErr || plansErr}). Press Reload lists.</div> : null}
     <div className="form-grid">
       <Field label="Tenant"><select value={f.tenant_id} onChange={(e) => set('tenant_id', e.target.value)}><option value="">Select</option>{(tenants || []).map((t) => <option key={t.tenant_id} value={t.tenant_id}>{t.full_name}</option>)}</select></Field>
+      {(tenants || []).length > 0 ? <p className="sub">Available: {(tenants || []).map((t) => t.full_name).join(', ')}. Open the list above to pick one.</p> : <p className="sub">No tenants found. Register one on the Tenants page first.</p>}
       <Field label="Property"><select value={f.property_id} onChange={(e) => set('property_id', e.target.value)}><option value="">Select</option>{(props || []).map((p) => <option key={p.property_id} value={p.property_id}>{p.property_name}</option>)}</select></Field>
       <Field label="Agreement no" error={need(f.agreement_number)}><input value={f.agreement_number} onChange={(e) => set('agreement_number', e.target.value)} /></Field>
       <Field label="Start date" error={need(f.start_date)}><input type="date" value={f.start_date} onChange={(e) => set('start_date', e.target.value)} /></Field>
