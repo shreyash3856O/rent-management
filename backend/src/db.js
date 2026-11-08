@@ -71,6 +71,15 @@ const ready = (async () => {
     }
   }
   await client.execute('PRAGMA foreign_keys = ON;');
+  try {
+    await client.execute('PRAGMA journal_mode = WAL;');
+    await client.execute('PRAGMA busy_timeout = 15000;');
+    await client.execute('PRAGMA synchronous = NORMAL;');
+    await client.execute('PRAGMA cache_size = -64000;');
+    await client.execute('PRAGMA temp_store = MEMORY;');
+  } catch (e) {
+    console.error('[db] pragma configuration note:', e.message);
+  }
   for (const stmt of splitStatements(SCHEMA)) {
     await client.execute(stmt);
   }
@@ -106,6 +115,122 @@ const ready = (async () => {
         SELECT ?,?,?,?,? WHERE NOT EXISTS (SELECT 1 FROM notification_templates WHERE event_code = ? AND channel = ?)`,
         args: [name, code, ch, subj, msg, code, ch] });
     } catch (e) { console.error('[db] template migration note:', e.message); }
+  }
+
+  // Modern permissions setup for all SRS modules
+  const modernModules = {
+    EXPENSE: ['VIEW','ADD','EDIT','DELETE','APPROVE'],
+    VENDOR: ['VIEW','ADD','EDIT','DELETE','APPROVE'],
+    TAX: ['VIEW','ADD','EDIT','DELETE','APPROVE'],
+    GST: ['VIEW','ADD','EDIT','DELETE','APPROVE'],
+    ACCOUNTING: ['VIEW','ADD','EDIT','DELETE','APPROVE'],
+    DEPOSIT: ['VIEW','ADD','EDIT','DELETE','APPROVE'],
+    DOCUMENT: ['VIEW','ADD','EDIT','DELETE'],
+    MAINTENANCE: ['VIEW','ADD','EDIT','DELETE']
+  };
+  for (const [mod, acts] of Object.entries(modernModules)) {
+    for (const act of acts) {
+      try {
+        await client.execute({
+          sql: `INSERT OR IGNORE INTO permissions (module_name, permission_name) VALUES (?,?)`,
+          args: [mod, act]
+        });
+      } catch {}
+    }
+  }
+  // Grant to roles: role 1 (SUPER_ADMIN) gets all; role 2 (OWNER), 3 (MANAGER), 4 (ACCOUNTANT) get appropriate access
+  try {
+    const allPerms = (await client.execute('SELECT permission_id, module_name FROM permissions')).rows || [];
+    for (const r of allPerms) {
+      const pid = Number(r[0]);
+      const mod = String(r[1]);
+      // SUPER_ADMIN (1)
+      await client.execute({
+        sql: `INSERT OR IGNORE INTO role_permissions (role_id, permission_id, can_view, can_add, can_edit, can_delete, can_approve) VALUES (1,?,1,1,1,1,1)`,
+        args: [pid]
+      });
+      // OWNER (2)
+      await client.execute({
+        sql: `INSERT OR IGNORE INTO role_permissions (role_id, permission_id, can_view, can_add, can_edit, can_delete, can_approve) VALUES (2,?,1,1,1,1,1)`,
+        args: [pid]
+      });
+      // MANAGER (3)
+      if (['EXPENSE','VENDOR','TAX','DEPOSIT','DOCUMENT','MAINTENANCE'].includes(mod)) {
+        await client.execute({
+          sql: `INSERT OR IGNORE INTO role_permissions (role_id, permission_id, can_view, can_add, can_edit, can_delete, can_approve) VALUES (3,?,1,1,1,0,1)`,
+          args: [pid]
+        });
+      }
+      // ACCOUNTANT (4)
+      if (['EXPENSE','VENDOR','TAX','GST','ACCOUNTING','DEPOSIT','REPORTS'].includes(mod)) {
+        await client.execute({
+          sql: `INSERT OR IGNORE INTO role_permissions (role_id, permission_id, can_view, can_add, can_edit, can_delete, can_approve) VALUES (4,?,1,1,1,0,1)`,
+          args: [pid]
+        });
+      }
+    }
+  } catch (e) {
+    console.error('[db] perm grant note:', e.message);
+  }
+
+  // Seed default expense categories if empty
+  try {
+    const expCount = (await client.execute('SELECT COUNT(*) FROM expense_categories')).rows[0][0];
+    if (Number(expCount) === 0) {
+      const defaultCats = [
+        ['ELECTRICITY', 'Electricity and power bills'],
+        ['WATER', 'Water supply and tanker charges'],
+        ['INTERNET', 'Broadband and Wi-Fi services'],
+        ['SECURITY', 'Security personnel and surveillance'],
+        ['CLEANING', 'Housekeeping and waste disposal'],
+        ['REPAIRS', 'Minor repairs and hardware fixes'],
+        ['MAINTENANCE', 'Routine building and appliance maintenance'],
+        ['SALARY', 'Staff and helper salaries'],
+        ['PROPERTY_TAX', 'Municipal property tax and assessments'],
+        ['INSURANCE', 'Building and property insurance'],
+        ['LEGAL', 'Legal, audit, and documentation fees'],
+        ['OTHER', 'Miscellaneous operational expenses']
+      ];
+      for (const [name, desc] of defaultCats) {
+        await client.execute({
+          sql: `INSERT OR IGNORE INTO expense_categories (category_name, description) VALUES (?,?)`,
+          args: [name, desc]
+        });
+      }
+    }
+  } catch (e) {
+    console.error('[db] default categories note:', e.message);
+  }
+
+  // Seed default ledger accounts if empty
+  try {
+    const accCount = (await client.execute('SELECT COUNT(*) FROM ledger_accounts')).rows[0][0];
+    if (Number(accCount) === 0) {
+      const defaultAccs = [
+        ['1001', 'Cash on Hand', 'ASSET'],
+        ['1002', 'Bank Account', 'ASSET'],
+        ['2001', 'Security Deposits Held', 'LIABILITY'],
+        ['3001', 'Owners Equity', 'EQUITY'],
+        ['4001', 'Rental Income', 'INCOME'],
+        ['4002', 'Maintenance Income', 'INCOME'],
+        ['4003', 'Other Charges Income', 'INCOME'],
+        ['5001', 'Electricity Expense', 'EXPENSE'],
+        ['5002', 'Water Expense', 'EXPENSE'],
+        ['5003', 'Cleaning & Sanitation', 'EXPENSE'],
+        ['5004', 'Repairs & Maintenance', 'EXPENSE'],
+        ['5005', 'Property Tax Expense', 'EXPENSE'],
+        ['5006', 'Staff Salaries', 'EXPENSE'],
+        ['5007', 'Operating Expenses', 'EXPENSE']
+      ];
+      for (const [code, name, type] of defaultAccs) {
+        await client.execute({
+          sql: `INSERT OR IGNORE INTO ledger_accounts (account_code, account_name, account_type) VALUES (?,?,?)`,
+          args: [code, name, type]
+        });
+      }
+    }
+  } catch (e) {
+    console.error('[db] default accounts note:', e.message);
   }
   console.log(`[db] ready (${REMOTE ? 'embedded replica + Turso' : 'local file'}).`);
 })().catch((e) => { console.error('[db] init failed:', e.message); process.exit(1); });

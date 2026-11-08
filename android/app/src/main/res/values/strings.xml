@@ -1,0 +1,7 @@
+<resources>
+    <string name="app_name">Rent Ledger</string>
+    <string name="title_activity_main">Rent Ledger</string>
+    <string name="package_name">com.rentledger.tenant</string>
+    <string name="custom_url_scheme">rentledger</string>
+</resources>
+

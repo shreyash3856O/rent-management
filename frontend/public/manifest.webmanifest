@@ -1,0 +1,25 @@
+{
+  "short_name": "RentLedger",
+  "name": "Rent Ledger - Property & Rent Management",
+  "description": "Tenant self-service app for paying rent, downloading receipts, raising complaints, and managing rental documents.",
+  "icons": [
+    {
+      "src": "/icon-192.png",
+      "type": "image/png",
+      "sizes": "192x192",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/icon-512.png",
+      "type": "image/png",
+      "sizes": "512x512",
+      "purpose": "any maskable"
+    }
+  ],
+  "start_url": "/tenant/login",
+  "background_color": "#ffffff",
+  "theme_color": "#111111",
+  "display": "standalone",
+  "orientation": "portrait"
+}
+

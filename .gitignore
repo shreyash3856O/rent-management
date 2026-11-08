@@ -7,3 +7,12 @@ frontend/node_modules/
 frontend/dist/
 *.log
 .DS_Store
+.gradle/
+**/build/
+android/.gradle/
+android/build/
+android/app/build/
+local.properties
+.idea/
+~$*
+*.tmp

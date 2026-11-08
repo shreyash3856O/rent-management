@@ -8,7 +8,19 @@ async function req(path, opts = {}) {
   const text = await res.text();
   let data = null;
   try { data = text ? JSON.parse(text) : null; } catch { data = { raw: text }; }
-  if (!res.ok) throw new Error((data && data.error) || ('Request failed: ' + res.status));
+  if (!res.ok) {
+    if (res.status === 401) {
+      const oldRole = localStorage.getItem('prm_role');
+      localStorage.removeItem('prm_token');
+      localStorage.removeItem('prm_role');
+      const loc = window.location.pathname;
+      if (!loc.includes('/login') && !loc.includes('/register')) {
+        const dest = (oldRole === 'tenant' || loc.startsWith('/tenant')) ? '/tenant/login?expired=1' : '/login?expired=1';
+        window.location.href = dest;
+      }
+    }
+    throw new Error((data && data.error) || ('Request failed: ' + res.status));
+  }
   return data;
 }
 export const api = {
@@ -24,6 +36,14 @@ export async function uploadFile(file) {
   const res = await fetch('/api/uploads', { method: 'POST', headers: { ...(token ? { Authorization: 'Bearer ' + token } : {}) }, body: fd });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(data.error || 'Upload failed');
+  return data;
+}
+export async function uploadKycFile(file) {
+  const fd = new FormData();
+  fd.append('file', file);
+  const res = await fetch('/api/auth/tenant/upload-kyc', { method: 'POST', body: fd });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || 'KYC Upload failed');
   return data;
 }
 export function money(n) {

@@ -1,0 +1,13 @@
+[
+  {
+    "relation": ["delegate_permission/common.handle_all_urls"],
+    "target": {
+      "namespace": "android_app",
+      "package_name": "com.rentledger.tenant",
+      "sha256_cert_fingerprints": [
+        "14:6D:E9:CD:07:4B:43:A1:04:F6:4E:A2:46:EC:69:2B:A3:33:33:39:84:69:4E:92:CB:A3:40:E1:98:F6:CB:A4"
+      ]
+    }
+  }
+]
+

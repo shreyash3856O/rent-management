@@ -1,0 +1,16 @@
+{
+  "appId": "com.rentledger.tenant",
+  "appName": "Rent Ledger",
+  "webDir": "frontend/dist",
+  "bundledWebRuntime": false,
+  "server": {
+    "androidScheme": "https",
+    "cleartext": false
+  },
+  "android": {
+    "allowMixedContent": false,
+    "captureInput": true,
+    "webContentsDebuggingEnabled": false
+  }
+}
+

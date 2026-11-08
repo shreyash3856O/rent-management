@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useCallback } from 'react';
 import { BrowserRouter, Routes, Route, Link, NavLink, useNavigate, useLocation, useParams, Navigate } from 'react-router-dom';
-import { api, money, fmtDate, uploadFile, fileUrl, busy, withBusy } from './api.js';
+import { api, money, fmtDate, uploadFile, uploadKycFile, fileUrl, busy, withBusy } from './api.js';
 
 function useFetch(path, deps = []) {
   const [data, setData] = useState(null);
@@ -41,6 +41,8 @@ function BusyOverlay() {
 /* ---------- login ---------- */
 function AdminLogin() {
   const nav = useNavigate();
+  const loc = useLocation();
+  const isExpired = new URLSearchParams(loc.search).get('expired') === '1';
   const [email, setEmail] = useState('admin@abcproperty.com');
   const [password, setPassword] = useState('admin123');
   const [err, setErr] = useState(null);
@@ -49,6 +51,7 @@ function AdminLogin() {
     <div className="login-wrap">
     <h1>Rent Ledger. Admin sign in.</h1>
     <p className="sub">Use email and password. Demo account is prefilled.</p>
+    {isExpired ? <div className="notice overdue-text" style={{ margin: '8px 0' }}>Your session expired. Please sign in again.</div> : null}
     <Field label="Email" error={need(email)}><input value={email} onChange={(e) => setEmail(e.target.value)} /></Field>
     <Field label="Password" error={need(password)}><input type="password" value={password} onChange={(e) => setPassword(e.target.value)} /></Field>
     {err ? <div className="field-err">{err}</div> : null}
@@ -60,26 +63,288 @@ function AdminLogin() {
 }
 function TenantLogin() {
   const nav = useNavigate();
+  const loc = useLocation();
+  const isExpired = new URLSearchParams(loc.search).get('expired') === '1';
   const [mobile, setMobile] = useState('9000000001');
-  const [otp, setOtp] = useState('');
+  const [otp, setOtp] = useState('8520');
   const [sent, setSent] = useState(null);
   const [err, setErr] = useState(null);
   return (<div className="login-screen">
     <video className="bg" src="/vid1.mp4" autoPlay muted loop playsInline preload="auto" />
     <div className="login-wrap">
     <h1>Rent Ledger. Tenant sign in.</h1>
-    <p className="sub">Step 1, request OTP. Step 2, enter OTP. While no SMS vendor is connected, the demo code is 8520.</p>
+    <p className="sub">Step 1, request OTP. Step 2, enter OTP. Demo code 8520 is prefilled.</p>
+    {isExpired ? <div className="notice overdue-text" style={{ margin: '8px 0' }}>Your session expired. Please sign in again with OTP.</div> : null}
     <Field label="Mobile" error={mobileErr(mobile)}><input inputMode="numeric" maxLength={10} value={mobile} onChange={(e) => setMobile(e.target.value.replace(/\D/g, '').slice(0, 10))} /></Field>
-    <p><button onClick={async () => { try { const r = await withBusy('Requesting OTP.', async () => api.post('/api/auth/tenant/request-otp', { mobile })); setSent(r.otp); setErr(null); } catch (e) { setErr(e.message); } }}>Request OTP</button></p>
-    {sent ? <div className="notice">Demo OTP for {mobile}: <b>{sent}</b>. Enter it below.</div> : null}
+    <p><button onClick={async () => { try { const r = await withBusy('Requesting OTP.', async () => api.post('/api/auth/tenant/request-otp', { mobile })); setSent(r.otp || '8520'); setOtp(r.otp || '8520'); setErr(null); } catch (e) { setErr(e.message); } }}>Request OTP</button></p>
+    {sent ? <div className="notice">Demo OTP for {mobile}: <b>{sent}</b> (auto-filled). Click Verify below.</div> : null}
     <Field label="OTP"><input value={otp} onChange={(e) => setOtp(e.target.value)} /></Field>
     {err ? <div className="field-err">{err}</div> : null}
     <p><button className="primary" disabled={!mobile || !otp} onClick={async () => {
       try { const r = await withBusy('Verifying OTP.', async () => api.post('/api/auth/tenant/verify-otp', { mobile, otp })); localStorage.setItem('prm_token', r.token); localStorage.setItem('prm_role', 'tenant'); nav('/tenant'); }
       catch (e) { setErr(e.message); }
     }}>Verify and sign in</button> <Link className="btn" to="/login">Admin sign in</Link></p>
+    <div style={{ marginTop: 16, paddingTop: 14, borderTop: '1px solid var(--line)' }}>
+      <p style={{ margin: '0 0 8px', fontSize: 13, color: 'var(--muted)' }}>Moving into one of our properties?</p>
+      <Link className="btn primary" to="/tenant/register" style={{ width: '100%', textAlign: 'center', boxSizing: 'border-box' }}>New Tenant: Register & Select Room</Link>
+    </div>
   </div></div>);
 }
+
+function TenantRegister() {
+  const nav = useNavigate();
+  const [inv, setInv] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState(null);
+  const [success, setSuccess] = useState(null);
+
+  const [form, setForm] = useState({
+    property_id: '',
+    unit_id: '',
+    bed_id: '',
+    full_name: '',
+    mobile: '',
+    email: '',
+    gender: 'MALE',
+    date_of_birth: '',
+    occupation: 'EMPLOYED',
+    permanent_address: '',
+    emergency_contact_name: '',
+    emergency_contact_mobile: '',
+    kyc_document_type: 'AADHAAR',
+    kyc_document_number: '',
+    kyc_file_path: '',
+    start_date: new Date().toISOString().slice(0, 10),
+  });
+
+  const [kycStatus, setKycStatus] = useState('');
+
+  useEffect(() => {
+    api.get('/api/public/inventory')
+      .then((data) => {
+        setInv(data);
+        if (data.properties?.length > 0) {
+          const firstPid = String(data.properties[0].property_id);
+          const pUnits = (data.units || []).filter(u => String(u.property_id) === firstPid);
+          const firstUid = pUnits.length > 0 ? String(pUnits[0].unit_id) : '';
+          const pBeds = (data.beds || []).filter(b => String(b.unit_id) === firstUid);
+          setForm(f => ({
+            ...f,
+            property_id: firstPid,
+            unit_id: firstUid,
+            bed_id: pBeds.length > 0 ? String(pBeds[0].bed_id) : '',
+          }));
+        }
+      })
+      .catch((e) => setErr('Failed to load inventory: ' + e.message))
+      .finally(() => setLoading(false));
+  }, []);
+
+  const handlePropertyChange = (pid) => {
+    const pUnits = (inv?.units || []).filter(u => String(u.property_id) === String(pid));
+    const firstUid = pUnits.length > 0 ? String(pUnits[0].unit_id) : '';
+    const pBeds = (inv?.beds || []).filter(b => String(b.unit_id) === firstUid);
+    setForm(f => ({
+      ...f,
+      property_id: pid,
+      unit_id: firstUid,
+      bed_id: pBeds.length > 0 ? String(pBeds[0].bed_id) : '',
+    }));
+  };
+
+  const handleUnitChange = (uid) => {
+    const pBeds = (inv?.beds || []).filter(b => String(b.unit_id) === String(uid));
+    setForm(f => ({
+      ...f,
+      unit_id: uid,
+      bed_id: pBeds.length > 0 ? String(pBeds[0].bed_id) : '',
+    }));
+  };
+
+  const selectedUnit = (inv?.units || []).find(u => String(u.unit_id) === String(form.unit_id));
+  const availableUnits = (inv?.units || []).filter(u => String(u.property_id) === String(form.property_id));
+  const availableBeds = (inv?.beds || []).filter(b => String(b.unit_id) === String(form.unit_id));
+
+  const handleUploadKyc = async (file) => {
+    if (!file) return;
+    try {
+      const res = await withBusy('Uploading ID document...', async () => uploadKycFile(file));
+      setForm(f => ({ ...f, kyc_file_path: res.file_path }));
+      setKycStatus('Document uploaded: ' + res.file_name);
+    } catch (e) {
+      setErr('File upload failed: ' + e.message);
+    }
+  };
+
+  const submit = async (e) => {
+    e.preventDefault();
+    setErr(null);
+    if (!form.property_id || !form.unit_id) {
+      setErr('Please select a property and unit/room.');
+      return;
+    }
+    if (!form.full_name.trim()) {
+      setErr('Full name is required.');
+      return;
+    }
+    if (!/^\d{10}$/.test(form.mobile.trim())) {
+      setErr('A valid 10-digit mobile number is required.');
+      return;
+    }
+
+    try {
+      const payload = {
+        ...form,
+        property_id: Number(form.property_id),
+        unit_id: Number(form.unit_id),
+        bed_id: form.bed_id ? Number(form.bed_id) : null,
+      };
+      const res = await withBusy('Registering tenant & creating rental agreement...', async () => {
+        return await api.post('/api/auth/tenant/register', payload);
+      });
+      localStorage.setItem('prm_token', res.token);
+      localStorage.setItem('prm_role', 'tenant');
+      setSuccess('Registration complete! Welcome to Rent Ledger.');
+      setTimeout(() => {
+        nav('/tenant');
+      }, 900);
+    } catch (e) {
+      setErr(e.message);
+    }
+  };
+
+  return (
+    <div className="login-screen">
+      <video className="bg" src="/vid1.mp4" autoPlay muted loop playsInline preload="auto" />
+      <div className="register-wrap">
+        <h1>Tenant self-registration.</h1>
+        <p className="sub">Select your property and room, provide your details and KYC documents to register.</p>
+        
+        {loading ? <p>Loading property inventory...</p> : (
+          <form onSubmit={submit}>
+            <h2>1. Property & Room Selection</h2>
+            <div className="form-grid">
+              <Field label="Select Property" error={need(form.property_id)}>
+                <select value={form.property_id} onChange={(e) => handlePropertyChange(e.target.value)}>
+                  {inv?.properties?.map(p => (
+                    <option key={p.property_id} value={p.property_id}>{p.property_name} ({p.property_type || 'Residential'}, {p.city || 'City'})</option>
+                  ))}
+                </select>
+              </Field>
+
+              <Field label="Select Unit / Room" error={need(form.unit_id)}>
+                <select value={form.unit_id} onChange={(e) => handleUnitChange(e.target.value)}>
+                  {availableUnits.length === 0 ? <option value="">No units available</option> : null}
+                  {availableUnits.map(u => (
+                    <option key={u.unit_id} value={u.unit_id}>Unit {u.unit_number} - {money(u.monthly_rent)}/mo</option>
+                  ))}
+                </select>
+              </Field>
+            </div>
+
+            {availableBeds.length > 0 ? (
+              <Field label="Select Bed (Hostel / PG)">
+                <select value={form.bed_id} onChange={(e) => setForm({ ...form, bed_id: e.target.value })}>
+                  <option value="">Any / Not applicable</option>
+                  {availableBeds.map(b => (
+                    <option key={b.bed_id} value={b.bed_id}>Bed {b.bed_number} {b.monthly_rent ? '(' + money(b.monthly_rent) + '/mo)' : ''}</option>
+                  ))}
+                </select>
+              </Field>
+            ) : null}
+
+            {selectedUnit ? (
+              <div className="notice" style={{ margin: '8px 0' }}>
+                Selected: <b>Unit {selectedUnit.unit_number}</b> | Monthly Rent: <b>{money(selectedUnit.monthly_rent)}</b> | Security Deposit: <b>{money(selectedUnit.security_deposit || selectedUnit.monthly_rent * 2)}</b>
+              </div>
+            ) : null}
+
+            <Field label="Move-In Date">
+              <input type="date" value={form.start_date} onChange={(e) => setForm({ ...form, start_date: e.target.value })} />
+            </Field>
+
+            <h2>2. Personal Details</h2>
+            <div className="form-grid">
+              <Field label="Full Name *" error={need(form.full_name)}>
+                <input placeholder="As per Govt ID" value={form.full_name} onChange={(e) => setForm({ ...form, full_name: e.target.value })} />
+              </Field>
+              <Field label="Mobile Number *" error={mobileErr(form.mobile)}>
+                <input inputMode="numeric" maxLength={10} placeholder="10-digit mobile" value={form.mobile} onChange={(e) => setForm({ ...form, mobile: e.target.value.replace(/\D/g, '').slice(0, 10) })} />
+              </Field>
+              <Field label="Email Address">
+                <input type="email" placeholder="tenant@example.com" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} />
+              </Field>
+              <Field label="Gender">
+                <select value={form.gender} onChange={(e) => setForm({ ...form, gender: e.target.value })}>
+                  <option value="MALE">Male</option>
+                  <option value="FEMALE">Female</option>
+                  <option value="OTHER">Other</option>
+                </select>
+              </Field>
+              <Field label="Date of Birth">
+                <input type="date" value={form.date_of_birth} onChange={(e) => setForm({ ...form, date_of_birth: e.target.value })} />
+              </Field>
+              <Field label="Occupation">
+                <select value={form.occupation} onChange={(e) => setForm({ ...form, occupation: e.target.value })}>
+                  <option value="EMPLOYED">Employed</option>
+                  <option value="STUDENT">Student</option>
+                  <option value="SELF_EMPLOYED">Self-Employed</option>
+                  <option value="OTHER">Other</option>
+                </select>
+              </Field>
+            </div>
+
+            <Field label="Permanent Address">
+              <textarea rows={2} placeholder="Permanent home address" value={form.permanent_address} onChange={(e) => setForm({ ...form, permanent_address: e.target.value })} />
+            </Field>
+
+            <div className="form-grid">
+              <Field label="Emergency Contact Name">
+                <input placeholder="Relative / Guardian" value={form.emergency_contact_name} onChange={(e) => setForm({ ...form, emergency_contact_name: e.target.value })} />
+              </Field>
+              <Field label="Emergency Contact Mobile">
+                <input inputMode="numeric" maxLength={10} placeholder="10-digit mobile" value={form.emergency_contact_mobile} onChange={(e) => setForm({ ...form, emergency_contact_mobile: e.target.value.replace(/\D/g, '').slice(0, 10) })} />
+              </Field>
+            </div>
+
+            <h2>3. KYC Verification & Documents</h2>
+            <div className="form-grid">
+              <Field label="ID Document Type">
+                <select value={form.kyc_document_type} onChange={(e) => setForm({ ...form, kyc_document_type: e.target.value })}>
+                  <option value="AADHAAR">Aadhaar Card</option>
+                  <option value="PAN">PAN Card</option>
+                  <option value="PASSPORT">Passport</option>
+                  <option value="DRIVING_LICENSE">Driving License</option>
+                  <option value="VOTER_ID">Voter ID</option>
+                </select>
+              </Field>
+              <Field label="Document / ID Number">
+                <input placeholder="e.g. XXXX-XXXX-XXXX" value={form.kyc_document_number} onChange={(e) => setForm({ ...form, kyc_document_number: e.target.value })} />
+              </Field>
+            </div>
+
+            <Field label="Upload ID Document (PDF, JPG, PNG)">
+              <input type="file" accept=".jpg,.jpeg,.png,.webp,.pdf" onChange={(e) => handleUploadKyc(e.target.files?.[0])} />
+            </Field>
+            {kycStatus ? <div className="notice" style={{ color: '#005500', fontWeight: 'bold' }}>✓ {kycStatus}</div> : null}
+
+            {err ? <div className="field-err" style={{ margin: '12px 0' }}>{err}</div> : null}
+            {success ? <div className="notice" style={{ color: '#005500', fontWeight: 'bold', margin: '12px 0' }}>{success}</div> : null}
+
+            <p style={{ marginTop: 20 }}>
+              <button type="submit" className="primary" style={{ padding: '10px 20px', fontWeight: 'bold' }}>
+                Complete Registration & Enter App
+              </button>
+              {' '}
+              <Link className="btn" to="/tenant/login">Back to Sign In</Link>
+            </p>
+          </form>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function logout(nav) { localStorage.removeItem('prm_token'); localStorage.removeItem('prm_role'); nav('/login'); }
 
 /* ---------- admin ---------- */
@@ -122,8 +387,8 @@ function Dashboard() {
       <div className="kpi"><div className="n overdue-text">{money(d.finance.overdue)}</div><div className="l">Overdue ({d.finance.n || 0})</div></div>
     </div>
     <h2>Per property.</h2>
-    <table className="grid"><thead><tr><th>Property</th><th>Units</th><th>Occupied</th><th>Invoiced</th><th>Collected</th><th>Outstanding</th></tr></thead>
-      <tbody>{(d.perProperty || []).map((p) => <tr key={p.property_id}><td>{p.property_name}</td><td>{p.units}</td><td>{p.occupied}</td><td>{money(p.invoiced)}</td><td>{money(p.collected)}</td><td>{money(p.outstanding)}</td></tr>)}</tbody></table>
+    <div className="table-wrap"><table className="grid"><thead><tr><th>Property</th><th>Units</th><th>Occupied</th><th>Invoiced</th><th>Collected</th><th>Outstanding</th></tr></thead>
+      <tbody>{(d.perProperty || []).map((p) => <tr key={p.property_id}><td>{p.property_name}</td><td>{p.units}</td><td>{p.occupied}</td><td>{money(p.invoiced)}</td><td>{money(p.collected)}</td><td>{money(p.outstanding)}</td></tr>)}</tbody></table></div>
   </div>);
 }
 function Hierarchy() {
@@ -186,9 +451,9 @@ function Hierarchy() {
     {err ? <div className="field-err">{err}</div> : null}
     <p><button className="primary" onClick={add}>Add {f.kind}</button></p>
     <h2>Rooms and beds.</h2>
-    <table className="grid"><thead><tr><th>Room</th><th>Status</th><th>Rent</th><th>Beds</th></tr></thead><tbody>
+    <div className="table-wrap"><table className="grid"><thead><tr><th>Room</th><th>Status</th><th>Rent</th><th>Beds</th></tr></thead><tbody>
       {(units || []).map((u) => <tr key={u.unit_id}><td>{u.unit_number}</td><td><span className="tag">{u.status}</span></td><td>{money(u.monthly_rent)}</td>
-        <td>{(beds || []).filter((b) => b.unit_id === u.unit_id).map((b) => `${b.bed_number}:${b.status}`).join(', ')}</td></tr>)}</tbody></table>
+        <td>{(beds || []).filter((b) => b.unit_id === u.unit_id).map((b) => `${b.bed_number}:${b.status}`).join(', ')}</td></tr>)}</tbody></table></div>
   </div>);
 }
 function Tenants() {
@@ -277,14 +542,14 @@ function Tenants() {
         <Field label="ID number"><input value={editing.id_number || ''} onChange={(e) => setE('id_number', e.target.value)} /></Field>
         <Field label="Status"><select value={editing.status || 'ACTIVE'} onChange={(e) => setE('status', e.target.value)}><option>ACTIVE</option><option>INACTIVE</option><option>BLACKLISTED</option></select></Field></div>
       <p><button className="primary" onClick={saveEdit}>Save changes</button> <button onClick={() => setEditing(null)}>Cancel</button></p></div> : null}
-    <table className="grid"><thead><tr><th>Name</th><th>Mobile</th><th>KYC</th><th>Action</th></tr></thead><tbody>
+    <div className="table-wrap"><table className="grid"><thead><tr><th>Name</th><th>Mobile</th><th>KYC</th><th>Action</th></tr></thead><tbody>
       {(list || []).map((t) => {
         const k = (kyc || []).find((x) => x.tenant_id === t.tenant_id);
         return <tr key={t.tenant_id}><td>{t.full_name}</td><td>{t.mobile}</td><td><span className="tag">{k ? k.status : 'KYC_PENDING'}</span>{k && k.verified_by ? ` by ${k.verified_by} on ${fmtDate(k.verification_date)}` : ''}</td>
           <td className="row-actions"><button onClick={() => startEdit(t)}>Edit</button>
             <button onClick={() => markVerified(t)}>Mark verified</button>
             <button onClick={() => removeTenant(t)}>Delete</button></td></tr>;
-      })}</tbody></table>
+      })}</tbody></table></div>
   </div>);
 }
 function RentPlans() {
@@ -351,9 +616,9 @@ function RentPlans() {
         <Field label="Due day (1 to 28)"><input value={editing.due_day ?? ''} onChange={(e) => setE('due_day', e.target.value)} /></Field>
         <Field label="Status"><select value={editing.status || 'ACTIVE'} onChange={(e) => setE('status', e.target.value)}><option>ACTIVE</option><option>INACTIVE</option></select></Field></div>
       <p><button className="primary" onClick={() => save(true)}>Save changes</button> <button onClick={() => setEditing(null)}>Cancel</button></p></div> : null}
-    <table className="grid"><thead><tr><th>Plan</th><th>Maintenance</th><th>Water</th><th>Other</th><th>Due day</th><th>Status</th><th>Action</th></tr></thead><tbody>
+    <div className="table-wrap"><table className="grid"><thead><tr><th>Plan</th><th>Maintenance</th><th>Water</th><th>Other</th><th>Due day</th><th>Status</th><th>Action</th></tr></thead><tbody>
       {(list || []).map((p) => <tr key={p.rent_plan_id}><td>{p.plan_name}</td><td>{money(p.maintenance_charge)}</td><td>{money(p.water_charge)}</td><td>{money(p.other_charges)}</td><td>{p.due_day}</td><td><span className="tag">{p.status}</span></td>
-        <td className="row-actions"><button onClick={() => { setEditing({ ...p }); setNote(null); setErr(null); }}>Edit</button><button onClick={() => remove(p)}>Delete</button></td></tr>)}</tbody></table>
+        <td className="row-actions"><button onClick={() => { setEditing({ ...p }); setNote(null); setErr(null); }}>Edit</button><button onClick={() => remove(p)}>Delete</button></td></tr>)}</tbody></table></div>
   </div>);
 }
 function Agreements() {
@@ -419,9 +684,23 @@ function Agreements() {
           setEditing(null); setErr(null); setNote('Agreement saved. Future invoices use the new terms.'); load();
         } catch (e) { setErr(e.message); }
       }}>Save changes</button> <button onClick={() => setEditing(null)}>Cancel</button></p></div> : null}
-    <table className="grid"><thead><tr><th>No</th><th>Tenant</th><th>Rent</th><th>Status</th><th>Action</th></tr></thead><tbody>
-      {(list || []).map((a) => <tr key={a.agreement_id}><td>{a.agreement_number}</td><td>{a.tenant_name}</td><td>{money(a.monthly_rent)}</td><td><span className="tag">{a.status}</span></td>
-        <td className="row-actions"><button onClick={() => { setEditing({ ...a }); setNote(null); setErr(null); }}>Edit terms</button>{a.status === 'ACTIVE' ? <button onClick={async () => { if (window.confirm(`Terminate agreement ${a.agreement_number}? The room or bed returns to Available.`)) { await withBusy('Terminating agreement.', async () => api.put(`/api/agreements/${a.agreement_id}`, { status: 'TERMINATED', confirm: true })); load(); } }}>Terminate</button> : <button onClick={async () => { await withBusy('Activating agreement.', async () => api.put(`/api/agreements/${a.agreement_id}`, { status: 'ACTIVE' })); load(); }}>Activate</button>}</td></tr>)}</tbody></table>
+    <div className="table-wrap"><table className="grid"><thead><tr><th>No</th><th>Tenant</th><th>Rent</th><th>Status</th><th>Action</th></tr></thead><tbody>
+      {(!list || list.length === 0) ? <tr><td colSpan={5} style={{ textAlign: 'center', color: 'var(--muted)' }}>No agreements found.</td></tr> : null}
+      {(list || []).map((a) => <tr key={a.agreement_id}>
+        <td style={{ whiteSpace: 'nowrap', fontWeight: 600 }}>{a.agreement_number}</td>
+        <td style={{ minWidth: 140 }}>{a.tenant_name}</td>
+        <td style={{ whiteSpace: 'nowrap', fontWeight: 600 }}>{money(a.monthly_rent)}</td>
+        <td style={{ whiteSpace: 'nowrap' }}><span className="tag">{a.status}</span></td>
+        <td className="row-actions">
+          <button onClick={() => { setEditing({ ...a }); setNote(null); setErr(null); }}>Edit terms</button>
+          {a.status === 'ACTIVE' ? (
+            <button onClick={async () => { if (window.confirm(`Terminate agreement ${a.agreement_number}? The room or bed returns to Available.`)) { await withBusy('Terminating agreement.', async () => api.put(`/api/agreements/${a.agreement_id}`, { status: 'TERMINATED', confirm: true })); load(); } }}>Terminate</button>
+          ) : (
+            <button onClick={async () => { await withBusy('Activating agreement.', async () => api.put(`/api/agreements/${a.agreement_id}`, { status: 'ACTIVE' })); load(); }}>Activate</button>
+          )}
+        </td>
+      </tr>)}
+    </tbody></table></div>
   </div>);
 }
 function Invoices() {
@@ -468,8 +747,8 @@ function Invoices() {
       <Field label="Reference"><input value={pay.payment_reference} onChange={(e) => setPay({ ...pay, payment_reference: e.target.value })} /></Field>
       <Field label="Proof images (UPI screenshot, optional)"><input type="file" accept=".jpg,.jpeg,.png,.webp,.pdf" multiple onChange={(e) => setPayFiles(Array.from(e.target.files || []))} /></Field></div>
     <p><button className="primary" onClick={record}>Record payment</button></p>
-    <table className="grid"><thead><tr><th>Number</th><th>Tenant</th><th>Month</th><th>Due</th><th>Total</th><th>Paid</th><th>Due bal</th><th>Status</th><th>Detail</th></tr></thead><tbody>
-      {(list || []).map((i) => <tr key={i.invoice_id}><td>{i.invoice_number}</td><td>{i.tenant_name}</td><td>{fmtDate(i.invoice_month)}</td><td>{fmtDate(i.due_date)}</td><td>{money(i.total_amount)}</td><td>{money(i.paid_amount)}</td><td>{money(i.outstanding_amount)}</td><td>{i.status === 'OVERDUE' ? <span className="tag overdue">OVERDUE</span> : <span className="tag">{i.status}</span>}</td><td><button onClick={() => openDetail(i.invoice_id)}>{sel === i.invoice_id ? 'Hide' : 'View'}</button></td></tr>)}</tbody></table>
+    <div className="table-wrap"><table className="grid"><thead><tr><th>Number</th><th>Tenant</th><th>Month</th><th>Due</th><th>Total</th><th>Paid</th><th>Due bal</th><th>Status</th><th>Detail</th></tr></thead><tbody>
+      {(list || []).map((i) => <tr key={i.invoice_id}><td>{i.invoice_number}</td><td>{i.tenant_name}</td><td>{fmtDate(i.invoice_month)}</td><td>{fmtDate(i.due_date)}</td><td>{money(i.total_amount)}</td><td>{money(i.paid_amount)}</td><td>{money(i.outstanding_amount)}</td><td>{i.status === 'OVERDUE' ? <span className="tag overdue">OVERDUE</span> : <span className="tag">{i.status}</span>}</td><td><button onClick={() => openDetail(i.invoice_id)}>{sel === i.invoice_id ? 'Hide' : 'View'}</button></td></tr>)}</tbody></table></div>
     {detail ? <div><h2>Invoice {detail.invoice_number}: line items, payments, receipts.</h2>
       {detail.source ? <p className="sub">Built from agreement {detail.source.agreement_number} (rent {money(detail.source.monthly_rent)}{Number(detail.source.other_charges) > 0 ? `, other ${money(detail.source.other_charges)}` : ''}{detail.source.plan ? `, plan ${detail.source.plan.plan_name} with maintenance ${money(detail.source.plan.maintenance_charge)} and water ${money(detail.source.plan.water_charge)}` : ', no rent plan linked'}). Edit the agreement or plan, then rebuild this invoice while it is still unpaid.</p>
         : <p className="sub">Source agreement not found.</p>}
@@ -494,11 +773,11 @@ function Payments() {
   const [rc] = useFetch('/api/receipts');
   return (<div><h1>Payments and receipts.</h1><p className="sub">Every SUCCESS payment creates a receipt. Invoices reach PAID only through payment rows.</p>
     <h2>Receipts.</h2>
-    <table className="grid"><thead><tr><th>Receipt</th><th>Tenant</th><th>Amount</th><th>Date</th><th>Action</th></tr></thead><tbody>
-      {(rc || []).map((r) => <tr key={r.receipt_id}><td>{r.receipt_number}</td><td>{r.tenant_name}</td><td>{money(r.amount)}</td><td>{fmtDate(r.receipt_date)}</td><td><Link className="btn" to={`/admin/receipt/${r.receipt_id}`}>View and print</Link></td></tr>)}</tbody></table>
+    <div className="table-wrap"><table className="grid"><thead><tr><th>Receipt</th><th>Tenant</th><th>Amount</th><th>Date</th><th>Action</th></tr></thead><tbody>
+      {(rc || []).map((r) => <tr key={r.receipt_id}><td>{r.receipt_number}</td><td>{r.tenant_name}</td><td>{money(r.amount)}</td><td>{fmtDate(r.receipt_date)}</td><td><Link className="btn" to={`/admin/receipt/${r.receipt_id}`}>View and print</Link></td></tr>)}</tbody></table></div>
     <h2>Payments.</h2>
-    <table className="grid"><thead><tr><th>ID</th><th>Tenant</th><th>Amount</th><th>Mode</th><th>Status</th><th>Ref</th></tr></thead><tbody>
-      {(list || []).map((p) => <tr key={p.payment_id}><td>{p.payment_id}</td><td>{p.tenant_name}</td><td>{money(p.amount)}</td><td>{p.payment_mode}</td><td><span className="tag">{p.status}</span></td><td>{p.payment_reference}</td></tr>)}</tbody></table>
+    <div className="table-wrap"><table className="grid"><thead><tr><th>ID</th><th>Tenant</th><th>Amount</th><th>Mode</th><th>Status</th><th>Ref</th></tr></thead><tbody>
+      {(list || []).map((p) => <tr key={p.payment_id}><td>{p.payment_id}</td><td>{p.tenant_name}</td><td>{money(p.amount)}</td><td>{p.payment_mode}</td><td><span className="tag">{p.status}</span></td><td>{p.payment_reference}</td></tr>)}</tbody></table></div>
   </div>);
 }
 function ReceiptView({ base }) {
@@ -540,8 +819,8 @@ function AdminComplaints() {
     load();
   };
   return (<div><h1>Complaints.</h1><p className="sub">Flow is Open, Assigned, In Progress, Resolved, Closed. Steps only move forward.</p>
-    <table className="grid"><thead><tr><th>No</th><th>Tenant</th><th>Category</th><th>Title</th><th>Files</th><th>Status</th><th>Action</th></tr></thead><tbody>
-      {(list || []).map((c) => <tr key={c.complaint_id}><td>{c.complaint_number}</td><td>{c.tenant_name}</td><td>{c.category}</td><td>{c.title}</td><td>{c.files ? <button onClick={() => showFiles(c)}>{c.files} file(s)</button> : 0}</td><td><span className="tag">{c.status}</span></td><td><button onClick={() => adv(c)}>Advance</button></td></tr>)}</tbody></table>
+    <div className="table-wrap"><table className="grid"><thead><tr><th>No</th><th>Tenant</th><th>Category</th><th>Title</th><th>Files</th><th>Status</th><th>Action</th></tr></thead><tbody>
+      {(list || []).map((c) => <tr key={c.complaint_id}><td>{c.complaint_number}</td><td>{c.tenant_name}</td><td>{c.category}</td><td>{c.title}</td><td>{c.files ? <button onClick={() => showFiles(c)}>{c.files} file(s)</button> : 0}</td><td><span className="tag">{c.status}</span></td><td><button onClick={() => adv(c)}>Advance</button></td></tr>)}</tbody></table></div>
     {files ? <div><h2>Attachments for complaint {files.id}.</h2>
       <table className="grid"><thead><tr><th>File</th><th>Open</th></tr></thead><tbody>
         {files.items.map((a) => <tr key={a.document_id}><td>{a.file_name}</td><td><a href={fileUrl(a.file_path)} target="_blank" rel="noreferrer">Open</a></td></tr>)}
@@ -559,16 +838,16 @@ function Audit() {
     } catch (e) { setDiag({ error: e.message }); }
   };
   return (<div><h1>Audit log.</h1><p className="sub">Every financial or tenant data change is recorded with user, action and timestamp.</p>
-    <table className="grid"><thead><tr><th>When</th><th>User</th><th>Module</th><th>Action</th><th>Entity</th></tr></thead><tbody>
-      {(list || []).map((a) => <tr key={a.audit_id}><td>{a.created_at}</td><td>{a.user_id}</td><td>{a.module_name}</td><td>{a.action}</td><td>{a.entity_type} {a.entity_id}</td></tr>)}</tbody></table>
+    <div className="table-wrap"><table className="grid"><thead><tr><th>When</th><th>User</th><th>Module</th><th>Action</th><th>Entity</th></tr></thead><tbody>
+      {(list || []).map((a) => <tr key={a.audit_id}><td>{a.created_at}</td><td>{a.user_id}</td><td>{a.module_name}</td><td>{a.action}</td><td>{a.entity_type} {a.entity_id}</td></tr>)}</tbody></table></div>
     <h2>Mail delivery.</h2><p className="sub">SENT reached the mailbox. PENDING means mail is not configured (set SMTP on the server). FAILED carries the provider reason.</p>
     <div className="toolbar"><button onClick={testMail}>Test mail connection</button></div>
     {diag ? <div className="notice">Key: {diag.brevoKeyPresent ? `present (${diag.brevoKeyLength} chars, ${diag.keyType})` : 'missing'}. Sender: {diag.sender || 'not set'}. Brevo verdict: {diag.probe.valid ? 'key accepted' : diag.probe.note}{diag.error ? ` Error: ${diag.error}` : ''}</div> : null}
-    <table className="grid"><thead><tr><th>When</th><th>To</th><th>Subject</th><th>Status</th><th>Detail</th></tr></thead><tbody>
-      {((logs && logs.emails) || []).map((e) => <tr key={e.email_id}><td>{e.sent_at}</td><td>{e.email_address}</td><td>{e.subject}</td><td><span className="tag">{e.status}</span></td><td>{e.response}</td></tr>)}</tbody></table>
+    <div className="table-wrap"><table className="grid"><thead><tr><th>When</th><th>To</th><th>Subject</th><th>Status</th><th>Detail</th></tr></thead><tbody>
+      {((logs && logs.emails) || []).map((e) => <tr key={e.email_id}><td>{e.sent_at}</td><td>{e.email_address}</td><td>{e.subject}</td><td><span className="tag">{e.status}</span></td><td>{e.response}</td></tr>)}</tbody></table></div>
     <h2>Text delivery.</h2>
-    <table className="grid"><thead><tr><th>When</th><th>To</th><th>Status</th><th>Detail</th></tr></thead><tbody>
-      {((logs && logs.sms) || []).map((s) => <tr key={s.sms_id}><td>{s.sent_at}</td><td>{s.mobile}</td><td><span className="tag">{s.status}</span></td><td>{s.response}</td></tr>)}</tbody></table>
+    <div className="table-wrap"><table className="grid"><thead><tr><th>When</th><th>To</th><th>Status</th><th>Detail</th></tr></thead><tbody>
+      {((logs && logs.sms) || []).map((s) => <tr key={s.sms_id}><td>{s.sent_at}</td><td>{s.mobile}</td><td><span className="tag">{s.status}</span></td><td>{s.response}</td></tr>)}</tbody></table></div>
   </div>);
 }
 
@@ -585,41 +864,89 @@ function TenantLayout() {
     </Routes></div></div></div>);
 }
 function THome() {
-  const [d, err] = useFetch('/api/tenant/me');
-  if (err) return <div className="field-err">{err}</div>;
-  if (!d) return <p>Loading.</p>;
+  const nav = useNavigate();
+  const [d, err, load] = useFetch('/api/tenant/me');
+  const [delErr, setDelErr] = useState(null);
+  if (err) return (<div className="alert-box">
+    <strong>Could not load profile:</strong> {err}
+    <div style={{ marginTop: 8 }}><button onClick={load}>Retry</button> <button onClick={() => logout(nav)}>Sign in again</button></div>
+  </div>);
+  if (!d) return <p>Loading dashboard...</p>;
   const od = Number(d.dues?.overdue || 0) > 0;
+  const kycStatus = d.kyc?.status || d.kyc?.verification_status || 'KYC_PENDING';
+
+  const deleteAccount = async () => {
+    if (!window.confirm('Are you sure you want to request account deletion? All personal data will be unlinked as required by Google Play data privacy rules.')) return;
+    try {
+      await withBusy('Processing account deletion...', async () => {
+        return await api.post('/api/tenant/delete-account', { reason: 'User requested in app' });
+      });
+      alert('Your account deletion request has been processed. Signing out.');
+      localStorage.removeItem('prm_token');
+      localStorage.removeItem('prm_role');
+      nav('/tenant/login');
+    } catch (e) {
+      setDelErr(e.message);
+    }
+  };
+
   return (<div><h1>Hello, {d.tenant?.full_name}.</h1>
-    <p className="sub">Room {d.agreement?.unit_number || 'not assigned'}{d.agreement?.bed_number ? `, bed ${d.agreement.bed_number}` : ''}. Rent {money(d.agreement?.monthly_rent)}. Outstanding {money(d.dues?.outstanding)}.</p>
+    <p className="sub">{d.agreement?.property_name ? d.agreement.property_name + ' | ' : ''}Room {d.agreement?.unit_number || 'not assigned'}{d.agreement?.bed_number ? ', bed ' + d.agreement.bed_number : ''}. Rent {money(d.agreement?.monthly_rent)}. Outstanding {money(d.dues?.outstanding)}.</p>
+    <div style={{ margin: '8px 0 12px' }}>
+      KYC Status: <span className="tag">{kycStatus}</span>
+    </div>
     {od ? <div className="notice overdue-text">Rent overdue. {money(d.dues.overdue)} is past due. Pay now to clear it.</div> : null}
     <div className="kpis"><div className="kpi"><div className="n">{money(d.dues?.outstanding)}</div><div className="l">Outstanding</div></div>
       <div className="kpi"><div className="n">{d.agreement ? fmtDate(d.agreement.end_date) : '-'}</div><div className="l">Agreement ends</div></div></div>
     <div className="paybar"><span>Due: {money(d.dues?.outstanding)}</span><Link className="btn primary" to="/tenant/rent">Pay rent</Link></div>
+    <div style={{ marginTop: 40, paddingTop: 16, borderTop: '1px solid var(--line)' }}>
+      <p className="sub">Account controls (Google Play policy compliant)</p>
+      {delErr ? <div className="field-err">{delErr}</div> : null}
+      <button style={{ fontSize: 12, color: 'var(--muted)' }} onClick={deleteAccount}>Request Account Deletion</button>
+    </div>
   </div>);
 }
 function TRent() {
-  const [inv] = useFetch('/api/tenant/invoices');
-  const [pay] = useFetch('/api/tenant/payments');
+  const nav = useNavigate();
+  const [inv, invErr, loadInv] = useFetch('/api/tenant/invoices');
+  const [pay, payErr, loadPay] = useFetch('/api/tenant/payments');
   const [from, setFrom] = useState(() => new Date().getFullYear() + '-01-01');
   const [to, setTo] = useState(() => new Date().toISOString().slice(0, 10));
   const [stmt, setStmt] = useState(null);
-  const loadStmt = async () => { try { setStmt(await withBusy('Loading statement.', async () => api.get(`/api/tenant/statement?from=${from}&to=${to}`))); } catch (e) { setStmt({ error: e.message }); } };
+  const [stmtErr, setStmtErr] = useState(null);
+  const loadStmt = async () => {
+    setStmtErr(null);
+    try { setStmt(await withBusy('Loading statement.', async () => api.get(`/api/tenant/statement?from=${from}&to=${to}`))); }
+    catch (e) { setStmtErr(e.message); }
+  };
   useEffect(() => { loadStmt(); }, []);
+  if (invErr || payErr) return (<div className="alert-box">
+    <strong>Error loading rent data:</strong> {invErr || payErr}
+    <div style={{ marginTop: 8 }}><button onClick={() => { loadInv(); loadPay(); }}>Retry</button> <button onClick={() => logout(nav)}>Sign in again</button></div>
+  </div>);
   return (<div><h1>Rent and receipts.</h1><p className="sub">Current invoice first, then history. Payment is recorded by the office in v1.</p>
     <h2>Current and past invoices.</h2>
-    <table className="grid"><thead><tr><th>Number</th><th>Due</th><th>Total</th><th>Paid</th><th>Status</th></tr></thead><tbody>
-      {(inv || []).map((i) => <tr key={i.invoice_id}><td>{i.invoice_number}</td><td>{fmtDate(i.due_date)}</td><td>{money(i.total_amount)}</td><td>{money(i.paid_amount)}</td><td>{i.status === 'OVERDUE' ? <span className="tag overdue">OVERDUE by record</span> : <span className="tag">{i.status}</span>}</td></tr>)}</tbody></table>
+    <div className="table-wrap"><table className="grid"><thead><tr><th>Number</th><th>Due</th><th>Total</th><th>Paid</th><th>Status</th></tr></thead><tbody>
+      {(!inv || inv.length === 0) ? <tr><td colSpan={5} style={{ textAlign: 'center', color: 'var(--muted)' }}>No invoices generated yet.</td></tr> : null}
+      {(inv || []).map((i) => <tr key={i.invoice_id}><td>{i.invoice_number}</td><td>{fmtDate(i.due_date)}</td><td>{money(i.total_amount)}</td><td>{money(i.paid_amount)}</td><td>{i.status === 'OVERDUE' ? <span className="tag overdue">OVERDUE</span> : <span className="tag">{i.status}</span>}</td></tr>)}
+    </tbody></table></div>
     <h2>Payment history.</h2>
-    <table className="grid"><thead><tr><th>Receipt</th><th>Amount</th><th>Date</th><th>Action</th></tr></thead><tbody>
-      {(pay || []).map((p) => <tr key={p.payment_id}><td>{p.receipt_number || '-'}</td><td>{money(p.amount)}</td><td>{fmtDate(p.payment_date)}</td><td>{p.receipt_id ? <Link className="btn" to={`/tenant/receipt/${p.receipt_id}`}>View and print</Link> : null}</td></tr>)}</tbody></table>
+    <div className="table-wrap"><table className="grid"><thead><tr><th>Receipt</th><th>Amount</th><th>Date</th><th>Action</th></tr></thead><tbody>
+      {(!pay || pay.length === 0) ? <tr><td colSpan={4} style={{ textAlign: 'center', color: 'var(--muted)' }}>No payment records found.</td></tr> : null}
+      {(pay || []).map((p) => <tr key={p.payment_id}><td>{p.receipt_number || '-'}</td><td>{money(p.amount)}</td><td>{fmtDate(p.payment_date)}</td><td>{p.receipt_id ? <Link className="btn" to={`/tenant/receipt/${p.receipt_id}`}>View and print</Link> : '-'}</td></tr>)}
+    </tbody></table></div>
     <h2>Ledger statement.</h2>
     <div className="toolbar"><input type="date" value={from} onChange={(e) => setFrom(e.target.value)} /><input type="date" value={to} onChange={(e) => setTo(e.target.value)} /><button onClick={loadStmt}>Load</button></div>
-    <table className="grid"><thead><tr><th>Date</th><th>Type</th><th>Reference</th><th>Billed</th><th>Paid</th></tr></thead><tbody>
-      {(Array.isArray(stmt) ? stmt : []).map((s, k) => <tr key={k}><td>{fmtDate(s.transaction_date)}</td><td>{s.transaction_type}</td><td>{s.reference_no}</td><td>{s.debit ? money(s.debit) : '-'}</td><td>{s.credit ? money(s.credit) : '-'}</td></tr>)}</tbody></table>
+    {stmtErr ? <div className="field-err">{stmtErr}</div> : null}
+    <div className="table-wrap"><table className="grid"><thead><tr><th>Date</th><th>Type</th><th>Reference</th><th>Billed</th><th>Paid</th></tr></thead><tbody>
+      {(!stmt || stmt.length === 0) ? <tr><td colSpan={5} style={{ textAlign: 'center', color: 'var(--muted)' }}>No statement records for selected date range.</td></tr> : null}
+      {(Array.isArray(stmt) ? stmt : []).map((s, k) => <tr key={k}><td>{fmtDate(s.transaction_date)}</td><td>{s.transaction_type}</td><td>{s.reference_no}</td><td>{s.debit ? money(s.debit) : '-'}</td><td>{s.credit ? money(s.credit) : '-'}</td></tr>)}
+    </tbody></table></div>
   </div>);
 }
 function TComplaints() {
-  const [me] = useFetch('/api/tenant/me');
+  const nav = useNavigate();
+  const [me, meErr, loadMe] = useFetch('/api/tenant/me');
   const [rows, setRows] = useState([]);
   const [f, setF] = useState({ category: 'PLUMBING', title: '', description: '' });
   const [file, setFile] = useState(null);
@@ -629,6 +956,10 @@ function TComplaints() {
     catch (e) { setMsg(e.message); }
   };
   useEffect(() => { if (me) loadList(); }, [me]);
+  if (meErr) return (<div className="alert-box">
+    <strong>Error loading complaints:</strong> {meErr}
+    <div style={{ marginTop: 8 }}><button onClick={loadMe}>Retry</button> <button onClick={() => logout(nav)}>Sign in again</button></div>
+  </div>);
   return (<div><h1>Complaints.</h1><p className="sub">File a complaint and track it to closure.</p>
     <Field label="Category"><select value={f.category} onChange={(e) => setF({ ...f, category: e.target.value })}><option>ELECTRICITY</option><option>WATER</option><option>PLUMBING</option><option>AC</option><option>FURNITURE</option><option>INTERNET</option><option>CLEANING</option><option>SECURITY</option><option>OTHER</option></select></Field>
     <Field label="Title" error={need(f.title)}><input value={f.title} onChange={(e) => setF({ ...f, title: e.target.value })} /></Field>
@@ -641,23 +972,30 @@ function TComplaints() {
         await withBusy(file ? 'Uploading photo and filing.' : 'Filing complaint.', async () => {
           let attachment_path = null;
           if (file) attachment_path = (await uploadFile(file)).file_path;
-          await api.post('/api/complaints', { property_id: me.agreement?.property_id, category: f.category, title: f.title, description: f.description, attachment_path });
+          await api.post('/api/complaints', { property_id: me?.agreement?.property_id, category: f.category, title: f.title, description: f.description, attachment_path });
         });
         setMsg('Complaint filed.'); setF({ category: 'PLUMBING', title: '', description: '' }); setFile(null); loadList();
       } catch (e) { setMsg(e.message); }
     }}>File complaint</button></p>
-    <table className="grid"><thead><tr><th>No</th><th>Title</th><th>Status</th><th>Files</th></tr></thead><tbody>
-      {rows.map((c) => <tr key={c.complaint_id}><td>{c.complaint_number}</td><td>{c.title}</td><td><span className="tag">{c.status}</span></td><td>{c.files || 0}</td></tr>)}</tbody></table>
+    <div className="table-wrap"><table className="grid"><thead><tr><th>No</th><th>Title</th><th>Status</th><th>Files</th></tr></thead><tbody>
+      {rows.length === 0 ? <tr><td colSpan={4} style={{ textAlign: 'center', color: 'var(--muted)' }}>No complaints filed yet.</td></tr> : null}
+      {rows.map((c) => <tr key={c.complaint_id}><td>{c.complaint_number}</td><td>{c.title}</td><td><span className="tag">{c.status}</span></td><td>{c.files || 0}</td></tr>)}
+    </tbody></table></div>
   </div>);
 }
 function TDocs() {
-  const [d, , load] = useFetch('/api/tenant/documents');
+  const nav = useNavigate();
+  const [d, err, load] = useFetch('/api/tenant/documents');
   const [up, setUp] = useState({ document_type: 'AADHAAR', document_number: '' });
   const [file, setFile] = useState(null);
   const [msg, setMsg] = useState(null);
-  if (!d) return <p>Loading.</p>;
+  if (err) return (<div className="alert-box">
+    <strong>Error loading documents:</strong> {err}
+    <div style={{ marginTop: 8 }}><button onClick={load}>Retry</button> <button onClick={() => logout(nav)}>Sign in again</button></div>
+  </div>);
+  if (!d) return <p>Loading documents...</p>;
   return (<div><h1>Documents.</h1><p className="sub">Agreement, KYC record and uploaded ID proofs.</p>
-    <p>KYC status: <span className="tag">{d.kyc?.status || 'KYC_PENDING'}</span></p>
+    <p>KYC status: <span className="tag">{d.kyc?.status || d.kyc?.verification_status || 'KYC_PENDING'}</span></p>
     <h2>Upload a document.</h2>
     <div className="form-grid">
       <Field label="Type"><select value={up.document_type} onChange={(e) => setUp({ ...up, document_type: e.target.value })}><option>AADHAAR</option><option>PAN</option><option>PASSPORT</option><option>DRIVING_LICENSE</option><option>ADDRESS_PROOF</option><option>EMPLOYMENT_PROOF</option><option>PHOTO</option><option>OTHER</option></select></Field>
@@ -674,18 +1012,35 @@ function TDocs() {
         setMsg('Uploaded. The office will verify it.'); setFile(null); load();
       } catch (e) { setMsg(e.message); }
     }}>Upload</button></p>
-    <h2>Agreements.</h2><table className="grid"><thead><tr><th>No</th><th>Status</th><th>Period</th></tr></thead><tbody>
-      {(d.agreements || []).map((a) => <tr key={a.agreement_id}><td>{a.agreement_number}</td><td>{a.status}</td><td>{fmtDate(a.start_date)} to {fmtDate(a.end_date)}</td></tr>)}</tbody></table>
-    <h2>ID documents.</h2><table className="grid"><thead><tr><th>Type</th><th>Status</th><th>File</th></tr></thead><tbody>
-      {(d.documents || []).map((x) => <tr key={x.tenant_document_id}><td>{x.document_type}</td><td>{x.verification_status}</td><td>{x.file_path && x.file_path.startsWith('/files/') ? <a href={fileUrl(x.file_path)} target="_blank" rel="noreferrer">Open</a> : (x.file_path || '-')}</td></tr>)}</tbody></table>
+    <h2>Agreements.</h2>
+    <div className="table-wrap"><table className="grid"><thead><tr><th>No</th><th>Status</th><th>Period</th></tr></thead><tbody>
+      {(!d.agreements || d.agreements.length === 0) ? <tr><td colSpan={3} style={{ textAlign: 'center', color: 'var(--muted)' }}>No agreements found.</td></tr> : null}
+      {(d.agreements || []).map((a) => <tr key={a.agreement_id}><td>{a.agreement_number}</td><td><span className="tag">{a.status}</span></td><td>{fmtDate(a.start_date)} to {fmtDate(a.end_date)}</td></tr>)}
+    </tbody></table></div>
+    <h2>ID documents.</h2>
+    <div className="table-wrap"><table className="grid"><thead><tr><th>Type</th><th>Status</th><th>File</th></tr></thead><tbody>
+      {(!d.documents || d.documents.length === 0) ? <tr><td colSpan={3} style={{ textAlign: 'center', color: 'var(--muted)' }}>No ID documents on record.</td></tr> : null}
+      {(d.documents || []).map((x) => <tr key={x.tenant_document_id}>
+        <td>{x.document_type}</td>
+        <td><span className="tag">{x.verification_status}</span></td>
+        <td>{x.file_path && x.file_path.startsWith('/files/') ? <a className="btn" style={{ padding: '2px 8px', fontSize: 12 }} href={fileUrl(x.file_path)} target="_blank" rel="noreferrer">Open File</a> : <span className="tag">{x.file_path ? 'Document on File' : '-'}</span>}</td>
+      </tr>)}
+    </tbody></table></div>
   </div>);
 }
 function TNotices() {
-  const [list] = useFetch('/api/notifications');
-  if (!list) return <p>Loading.</p>;
+  const nav = useNavigate();
+  const [list, err, load] = useFetch('/api/notifications');
+  if (err) return (<div className="alert-box">
+    <strong>Error loading notices:</strong> {err}
+    <div style={{ marginTop: 8 }}><button onClick={load}>Retry</button> <button onClick={() => logout(nav)}>Sign in again</button></div>
+  </div>);
+  if (!list) return <p>Loading notices...</p>;
   return (<div><h1>Notices.</h1><p className="sub">Invoice, payment and overdue messages.</p>
-    <table className="grid"><thead><tr><th>When</th><th>Subject</th><th>Message</th></tr></thead><tbody>
-      {list.map((n) => <tr key={n.notification_id}><td>{fmtDate(n.created_at)}</td><td>{n.subject}</td><td>{n.message}</td></tr>)}</tbody></table>
+    <div className="table-wrap"><table className="grid"><thead><tr><th>When</th><th>Subject</th><th>Message</th></tr></thead><tbody>
+      {list.length === 0 ? <tr><td colSpan={3} style={{ textAlign: 'center', color: 'var(--muted)' }}>No notices or notifications yet.</td></tr> : null}
+      {list.map((n) => <tr key={n.notification_id}><td>{fmtDate(n.created_at)}</td><td>{n.subject}</td><td>{n.message}</td></tr>)}
+    </tbody></table></div>
   </div>);
 }
 
@@ -704,6 +1059,7 @@ export default function App() {
   return (<BrowserRouter><BusyOverlay /><Routes>
     <Route path="/login" element={<AdminLogin />} />
     <Route path="/tenant/login" element={<TenantLogin />} />
+    <Route path="/tenant/register" element={<TenantRegister />} />
     <Route path="/admin/*" element={<Guard role="staff"><AdminLayout /></Guard>} />
     <Route path="/tenant/*" element={<Guard role="tenant"><TenantLayout /></Guard>} />
     <Route path="/" element={<Navigate to={(localStorage.getItem('prm_role') === 'tenant') ? '/tenant' : '/admin'} />} />

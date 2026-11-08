@@ -417,6 +417,59 @@ CREATE TABLE IF NOT EXISTS file_blobs (
   uploaded_by TEXT,
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
+
+-- Performance & High-Concurrency Indexes
+CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
+CREATE INDEX IF NOT EXISTS idx_users_mobile ON users(mobile);
+CREATE INDEX IF NOT EXISTS idx_users_role_id ON users(role_id);
+CREATE INDEX IF NOT EXISTS idx_properties_org ON properties(organization_id);
+CREATE INDEX IF NOT EXISTS idx_buildings_prop ON buildings(property_id);
+CREATE INDEX IF NOT EXISTS idx_floors_bld ON floors(building_id);
+CREATE INDEX IF NOT EXISTS idx_units_floor ON units(floor_id);
+CREATE INDEX IF NOT EXISTS idx_units_status ON units(status);
+CREATE INDEX IF NOT EXISTS idx_beds_unit ON beds(unit_id);
+CREATE INDEX IF NOT EXISTS idx_beds_status ON beds(status);
+CREATE INDEX IF NOT EXISTS idx_tenants_mobile ON tenants(mobile);
+CREATE INDEX IF NOT EXISTS idx_tenants_status ON tenants(status);
+CREATE INDEX IF NOT EXISTS idx_tenants_user ON tenants(user_id);
+CREATE INDEX IF NOT EXISTS idx_tenant_docs_tenant ON tenant_documents(tenant_id);
+CREATE INDEX IF NOT EXISTS idx_tenant_kyc_tenant ON tenant_kyc(tenant_id);
+CREATE INDEX IF NOT EXISTS idx_rent_plans_prop ON rent_plans(property_id);
+CREATE INDEX IF NOT EXISTS idx_agreements_tenant ON rental_agreements(tenant_id);
+CREATE INDEX IF NOT EXISTS idx_agreements_prop ON rental_agreements(property_id);
+CREATE INDEX IF NOT EXISTS idx_agreements_unit ON rental_agreements(unit_id);
+CREATE INDEX IF NOT EXISTS idx_agreements_status ON rental_agreements(status);
+CREATE INDEX IF NOT EXISTS idx_invoices_tenant ON rent_invoices(tenant_id);
+CREATE INDEX IF NOT EXISTS idx_invoices_agreement ON rent_invoices(agreement_id);
+CREATE INDEX IF NOT EXISTS idx_invoices_month ON rent_invoices(invoice_month);
+CREATE INDEX IF NOT EXISTS idx_invoices_status ON rent_invoices(status);
+CREATE INDEX IF NOT EXISTS idx_invoices_due ON rent_invoices(due_date);
+CREATE INDEX IF NOT EXISTS idx_invoice_items_inv ON invoice_items(invoice_id);
+CREATE INDEX IF NOT EXISTS idx_payments_invoice ON payments(invoice_id);
+CREATE INDEX IF NOT EXISTS idx_payments_tenant ON payments(tenant_id);
+CREATE INDEX IF NOT EXISTS idx_payments_status ON payments(status);
+CREATE INDEX IF NOT EXISTS idx_receipts_payment ON receipts(payment_id);
+CREATE INDEX IF NOT EXISTS idx_receipts_number ON receipts(receipt_number);
+CREATE INDEX IF NOT EXISTS idx_security_deposits_tenant ON security_deposits(tenant_id);
+CREATE INDEX IF NOT EXISTS idx_security_deposits_agr ON security_deposits(agreement_id);
+CREATE INDEX IF NOT EXISTS idx_expenses_prop ON expenses(property_id);
+CREATE INDEX IF NOT EXISTS idx_expenses_cat ON expenses(category_id);
+CREATE INDEX IF NOT EXISTS idx_expenses_vendor ON expenses(vendor_id);
+CREATE INDEX IF NOT EXISTS idx_expenses_date ON expenses(expense_date);
+CREATE INDEX IF NOT EXISTS idx_property_taxes_prop ON property_taxes(property_id);
+CREATE INDEX IF NOT EXISTS idx_property_taxes_status ON property_taxes(status);
+CREATE INDEX IF NOT EXISTS idx_ledger_entries_account ON ledger_entries(account_id);
+CREATE INDEX IF NOT EXISTS idx_ledger_entries_date ON ledger_entries(transaction_date);
+CREATE INDEX IF NOT EXISTS idx_complaints_tenant ON complaints(tenant_id);
+CREATE INDEX IF NOT EXISTS idx_complaints_prop ON complaints(property_id);
+CREATE INDEX IF NOT EXISTS idx_complaints_status ON complaints(status);
+CREATE INDEX IF NOT EXISTS idx_maintenance_tasks_complaint ON maintenance_tasks(complaint_id);
+CREATE INDEX IF NOT EXISTS idx_notices_target ON notices(target_type);
+CREATE INDEX IF NOT EXISTS idx_documents_entity ON documents(entity_type, entity_id);
+CREATE INDEX IF NOT EXISTS idx_notifications_tenant ON notifications(tenant_id);
+CREATE INDEX IF NOT EXISTS idx_notifications_status ON notifications(status);
+CREATE INDEX IF NOT EXISTS idx_audit_logs_user ON audit_logs(user_id);
+CREATE INDEX IF NOT EXISTS idx_audit_logs_created ON audit_logs(created_at);
 `;
 
 module.exports = { SCHEMA };
